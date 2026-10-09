@@ -6,6 +6,7 @@
  */
 import { PrismaClient } from '@prisma/client';
 import { importOmahaHotlineRecords } from '../src/lib/ingestion/omaha-hotline/importer';
+import { verifyNeonDevEndpoints } from '../src/lib/neon-preflight';
 
 try {
   process.loadEnvFile('.env');
@@ -33,22 +34,15 @@ async function runCli() {
   }
 
   // Preflight check: Verify both database URLs strictly target Neon dev branch
-  const dbUrl = process.env.DATABASE_URL || '';
-  const directUrl = process.env.DIRECT_URL || '';
-
-  if (!dbUrl || !directUrl) {
-    console.error('Preflight error: DATABASE_URL and DIRECT_URL must be defined.');
+  let preflight;
+  try {
+    preflight = verifyNeonDevEndpoints();
+    console.log(`Preflight verified: Neon dev branch "${preflight.expectedEndpointId}" (${preflight.pooledHost})`);
+  } catch (err) {
+    console.error('Preflight error:', err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 
-  // Neon safety check: ensure connection string does not point to a production endpoint
-  // Host check: ensure expected endpoint prefix
-  if (dbUrl.includes('localhost') || directUrl.includes('localhost')) {
-    console.error('Preflight error: Target points to localhost instead of Neon.');
-    process.exit(1);
-  }
-
-  console.log(`Preflight verified: Connected to Neon database endpoint.`);
   console.log(`Starting Omaha Hotline import (limit=${limit}, pageSize=${pageSize}, dryRun=${dryRun})...`);
 
   const prisma = new PrismaClient({ log: ['error', 'warn'] });

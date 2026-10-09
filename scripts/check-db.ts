@@ -7,6 +7,7 @@
  * Usage: npm run db:check
  */
 import { PrismaClient } from '@prisma/client';
+import { verifyNeonDevEndpoints } from '../src/lib/neon-preflight';
 
 try {
   process.loadEnvFile('.env');
@@ -77,6 +78,17 @@ async function probe(label: string, url: string) {
 
 async function main() {
   console.log('DealBeacon database check (read-only)\n');
+
+  try {
+    const verified = verifyNeonDevEndpoints();
+    console.log(`  ✔ Neon Dev Branch Identity Verified: "${verified.expectedEndpointId}"`);
+    console.log(`    Pooled Host : ${verified.pooledHost}`);
+    console.log(`    Direct Host : ${verified.directHost}`);
+    console.log('');
+  } catch (preflightErr) {
+    console.error(`  ✘ Neon Preflight Failure: ${preflightErr instanceof Error ? preflightErr.message : String(preflightErr)}`);
+    process.exit(1);
+  }
 
   const pooled = describeUrl(process.env.DATABASE_URL);
   const direct = describeUrl(process.env.DIRECT_URL);

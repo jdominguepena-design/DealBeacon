@@ -15,7 +15,10 @@
     "db:migrate:status": "prisma migrate status",
     "db:verify-schema": "tsx scripts/verify-schema.ts",
     "import:hotline": "tsx scripts/import-omaha-hotline.ts",
-    "verify:hotline": "tsx scripts/verify-hotline-import.ts"
+    "verify:hotline": "tsx scripts/verify-hotline-import.ts",
+    "reconcile:runs": "tsx scripts/reconcile-stale-runs.ts",
+    "test:preflight": "tsx src/lib/__tests__/neon-preflight.test.ts",
+    "test:recovery": "tsx src/lib/ingestion/recovery/__tests__/stale-run-recovery.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
