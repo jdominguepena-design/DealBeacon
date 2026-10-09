@@ -100,6 +100,7 @@ export async function planStaleRunRecovery(
       reconciliation: {
         reconciledAt: new Date().toISOString(),
         reason: 'Process terminated unexpectedly before clean shutdown; reconciled via Phase 2A recovery',
+        completedAtBasis: 'Reconciled terminal timestamp based on latest verified linked record (not a naturally completed import)',
         verifiedSourceRecordsCount: verifiedCount,
         previousRecordsIngested: run.recordsIngested,
       },

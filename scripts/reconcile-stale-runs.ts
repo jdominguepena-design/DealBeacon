@@ -63,6 +63,29 @@ async function main() {
       return;
     }
 
+    // Strict Safeguards before applying:
+    // 1. Confirm only approved runs are targeted
+    const approvedRunIds = new Set(['run-hotline-1791510520329', 'run-hotline-1791510791696']);
+    for (const p of plan.plans) {
+      if (!approvedRunIds.has(p.runId)) {
+        throw new Error(`Safety Abort: Unexpected run ID "${p.runId}" found in plan. Only approved runs may be modified.`);
+      }
+      if (p.currentStatus !== 'RUNNING') {
+        throw new Error(`Safety Abort: Run "${p.runId}" is not in RUNNING status (current: ${p.currentStatus}).`);
+      }
+    }
+
+    // 2. Confirm linked record counts have not changed
+    const r1 = plan.plans.find((p) => p.runId === 'run-hotline-1791510520329');
+    const r2 = plan.plans.find((p) => p.runId === 'run-hotline-1791510791696');
+    if (!r1 || r1.verifiedSourceRecordsCount !== 501) {
+      throw new Error(`Safety Abort: run-hotline-1791510520329 count mismatch (expected 501, got ${r1?.verifiedSourceRecordsCount}).`);
+    }
+    if (!r2 || r2.verifiedSourceRecordsCount !== 95) {
+      throw new Error(`Safety Abort: run-hotline-1791510791696 count mismatch (expected 95, got ${r2?.verifiedSourceRecordsCount}).`);
+    }
+
+    console.log('✔ Safeguards verified: Target runs match approved IDs, counts are intact (501 and 95), and statuses are RUNNING.');
     console.log('Applying reconciliation plan to Neon dev database...');
     const result = await executeStaleRunRecovery(prisma, plan);
     console.log(`\n✔ Reconciliation complete! Reconciled: ${result.runsReconciled}, Skipped: ${result.runsSkipped}`);
