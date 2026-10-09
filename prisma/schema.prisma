@@ -1,0 +1,281 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Neon pooled connection (runtime)
+  directUrl = env("DIRECT_URL")   // Neon direct connection (Prisma Migrate)
+}
+
+enum UserRole {
+  INVESTOR
+  ADMIN
+}
+
+enum LeadStatus {
+  NEW
+  RESEARCHING
+  CONTACTING
+  FOLLOW_UP
+  INTERESTED
+  NOT_INTERESTED
+  CLOSED_DEAL
+}
+
+enum PriorityLevel {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SignalSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum IngestionStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+model User {
+  id              String          @id @default(cuid())
+  email           String          @unique
+  name            String?
+  role            UserRole        @default(INVESTOR)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  savedProperties SavedProperty[]
+  notes           PropertyNote[]
+
+  @@map("users")
+}
+
+model Property {
+  id                  String          @id @default(cuid())
+  parcelId            String          @unique // Douglas County PIN format (e.g. "0421000000")
+  address             String          // e.g. "2418 N 24th St"
+  city                String          @default("Omaha")
+  state               String          @default("NE")
+  zip                 String          // e.g. "68110"
+  neighborhood        String?         // Benson, Dundee, North Omaha, South Omaha, Millard, Florence
+  propertyType        String          // SINGLE_FAMILY, MULTI_FAMILY, COMMERCIAL, VACANT_LOT
+  yearBuilt           Int?
+  bedrooms            Int?
+  bathrooms           Float?
+  squareFeet          Int?
+  lotSizeSqFt         Int?
+  assessedValue       Float?
+  estimatedValue      Float?
+  estimatedEquityPct  Float?          // e.g. 0.85 = 85% equity
+  
+  // Computed Opportunity & Confidence Scores
+  opportunityScore    Int             @default(0) // 0 - 100
+  dataConfidence      ConfidenceLevel @default(MEDIUM)
+  scoreBreakdownJson  Json?           // Structured array of contributing factors
+  lastScoredAt        DateTime?
+  
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  // Relational Connections
+  ownershipRecords    OwnershipRecord[]
+  taxRecords          TaxRecord[]
+  codeViolations      CodeViolation[]
+  signals             Signal[]
+  events              PropertyEvent[]
+  sourceRecords       SourceRecord[]
+  savedProperties     SavedProperty[]
+  notes               PropertyNote[]
+  scoreHistory        ScoreHistory[]
+
+  @@index([opportunityScore])
+  @@index([neighborhood])
+  @@index([zip])
+  @@map("properties")
+}
+
+model OwnershipRecord {
+  id              String    @id @default(cuid())
+  propertyId      String
+  property        Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  ownerName       String    // Synthetic demo name (e.g. "Demo Asset Holdings LLC")
+  mailingAddress  String
+  mailingCity     String
+  mailingState    String
+  mailingZip      String
+  isAbsentee      Boolean   @default(false)
+  isOutOfState    Boolean   @default(false)
+  isCorporate     Boolean   @default(false)
+  purchaseDate    DateTime?
+  purchasePrice   Float?
+  deedType        String?   // Warranty Deed, Quitclaim, Sheriff's Deed
+  ownershipYears  Float?
+  isCurrent       Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+
+  @@index([propertyId])
+  @@map("ownership_records")
+}
+
+model TaxRecord {
+  id               String    @id @default(cuid())
+  propertyId       String
+  property         Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  taxYear          Int
+  totalAssessed    Float
+  annualTaxDue     Float
+  amountDelinquent Float     @default(0)
+  isDelinquent     Boolean   @default(false)
+  delinquentYears  Int       @default(0)
+  taxSaleStatus    String?   // None, Tax Lien Issued, Sold at Tax Sale
+  createdAt        DateTime  @default(now())
+
+  @@index([propertyId])
+  @@index([isDelinquent])
+  @@map("tax_records")
+}
+
+model CodeViolation {
+  id              String         @id @default(cuid())
+  propertyId      String
+  property        Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  caseNumber      String         // e.g. "CE-2025-0819"
+  violationDate   DateTime
+  violationType   String         // EXTERIOR_MAINTENANCE, STRUCTURAL, TRASH_DEBRIS, TALL_WEEDS, VACANT_UNSECURED
+  severity        SignalSeverity @default(MEDIUM)
+  status          String         // OPEN, NOTICE_ISSUED, PENDING_HEARING, CONDEMNED, RESOLVED
+  description     String
+  inspectorNotes  String?
+  complianceDate  DateTime?
+  createdAt       DateTime       @default(now())
+
+  @@index([propertyId])
+  @@index([status])
+  @@map("code_violations")
+}
+
+model Signal {
+  id                String         @id @default(cuid())
+  propertyId        String
+  property          Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  signalType        String         // TAX_DELINQUENT, CODE_VIOLATION, REPEAT_VIOLATOR, ABSENTEE_OWNER, LONG_TENURE, VACANCY_INDICATOR
+  category          String         // FINANCIAL_DISTRESS, PROPERTY_DISTRESS, OWNERSHIP_SIGNAL, RECENCY_SIGNAL
+  scoreContribution Int            // Points added to score
+  severity          SignalSeverity @default(MEDIUM)
+  eventDate         DateTime
+  discoveredAt      DateTime       @default(now())
+  status            String         @default("ACTIVE") // ACTIVE, RESOLVED, HISTORICAL
+  sourceType        String         // DOUGLAS_COUNTY_TREASURER, CITY_OMAHA_CODE_ENFORCEMENT, REGISTER_OF_DEEDS
+  sourceRecordId    String?
+  sourceRecord      SourceRecord?  @relation(fields: [sourceRecordId], references: [id], onDelete: SetNull)
+  metadataJson      Json?          // Contextual payload
+
+  @@index([propertyId])
+  @@index([signalType])
+  @@map("signals")
+}
+
+model PropertyEvent {
+  id              String        @id @default(cuid())
+  propertyId      String
+  property        Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  eventDate       DateTime
+  eventType       String        // PURCHASE, MAILING_CHANGE, CODE_VIOLATION, TAX_DELINQUENCY, STATUS_CHANGE
+  title           String
+  description     String
+  severity        String?       // INFO, WARNING, DANGER, SUCCESS
+  sourceRecordId  String?
+  sourceRecord    SourceRecord? @relation(fields: [sourceRecordId], references: [id], onDelete: SetNull)
+  createdAt       DateTime      @default(now())
+
+  @@index([propertyId])
+  @@index([eventDate])
+  @@map("property_events")
+}
+
+model SourceRecord {
+  id              String          @id @default(cuid())
+  propertyId      String?
+  property        Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  sourceName      String          // e.g. "DOUGLAS_COUNTY_ASSESSOR", "OMAHA_CODE_ENFORCEMENT"
+  sourceRecordId  String          // External synthetic identifier
+  rawPayloadJson  Json            // Complete unaltered immutable raw source payload
+  ingestionRunId  String?
+  ingestionRun    IngestionRun?   @relation(fields: [ingestionRunId], references: [id], onDelete: SetNull)
+  matchedStatus   String          @default("MATCHED") // MATCHED, UNMATCHED, DUPLICATE_CANDIDATE
+  ingestedAt      DateTime        @default(now())
+  signals         Signal[]
+  events          PropertyEvent[]
+
+  @@unique([sourceName, sourceRecordId])
+  @@index([propertyId])
+  @@map("source_records")
+}
+
+model IngestionRun {
+  id              String          @id @default(cuid())
+  sourceName      String
+  startedAt       DateTime        @default(now())
+  completedAt     DateTime?
+  status          IngestionStatus @default(RUNNING)
+  recordsIngested Int             @default(0)
+  signalsCreated  Int             @default(0)
+  errorsJson      Json?
+  sourceRecords   SourceRecord[]
+
+  @@map("ingestion_runs")
+}
+
+model ScoreHistory {
+  id              String    @id @default(cuid())
+  propertyId      String
+  property        Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  score           Int
+  scoreBreakdown  Json      // JSON snapshot of contributing factors at time of calculation
+  calculatedAt    DateTime  @default(now())
+
+  @@index([propertyId])
+  @@map("score_history")
+}
+
+model SavedProperty {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  propertyId      String
+  property        Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  status          LeadStatus    @default(NEW)
+  priority        PriorityLevel @default(NORMAL)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([userId, propertyId])
+  @@map("saved_properties")
+}
+
+model PropertyNote {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  propertyId      String
+  property        Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  content         String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([propertyId])
+  @@map("property_notes")
+}
