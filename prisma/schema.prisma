@@ -100,6 +100,7 @@ model Property {
   savedProperties     SavedProperty[]
   notes               PropertyNote[]
   scoreHistory        ScoreHistory[]
+  hotlineReports      HotlineReport[]
 
   @@index([opportunityScore])
   @@index([neighborhood])
@@ -219,6 +220,7 @@ model SourceRecord {
   ingestedAt      DateTime        @default(now())
   signals         Signal[]
   events          PropertyEvent[]
+  hotlineReports  HotlineReport[]
 
   @@unique([sourceName, sourceRecordId])
   @@index([propertyId])
@@ -233,6 +235,7 @@ model IngestionRun {
   status          IngestionStatus @default(RUNNING)
   recordsIngested Int             @default(0)
   signalsCreated  Int             @default(0)
+  statsJson       Json?
   errorsJson      Json?
   sourceRecords   SourceRecord[]
 
@@ -278,4 +281,43 @@ model PropertyNote {
 
   @@index([propertyId])
   @@map("property_notes")
+}
+
+model HotlineReport {
+  id                   String        @id @default(cuid())
+  sourceName           String        @default("OMAHA_HOTLINE")
+  sourceGlobalId       String        @unique // ArcGIS globalid (stable UUID)
+  sourceObjectId       Int           // ArcGIS objectid (for direct upstream reference)
+  requestId            String?       // City of Omaha public request identifier (e.g. "629894")
+  reportCategory       String?       // Broad category e.g. "Code/Housing Violati", "Pothole", "Parks_Trees_Weeds"
+  problemType          String?       // Detailed problem type (PROBTYPE)
+  locationText         String?       // LOCDESC e.g. "1701 Farnam St, Omaha, NE, 68102"
+  status               String?       // Raw City status code e.g. "CLOSED", "IP", "Submitted"
+  recordKind           String        @default("UNVERIFIED_COMPLAINT") // Distinguished from confirmed code violations
+  reportedAt           DateTime?     // Effective report date (SUBMITDT fallback to CreationDate)
+  reportedAtSource     String?       // "SUBMITDT" | "CreationDate"
+  completedAt          DateTime?     // Actual completion date (ACTDATE)
+  sourceCreatedAt      DateTime?     // CreationDate in ArcGIS
+  sourceEditedAt       DateTime?     // EditDate in ArcGIS (used for change detection)
+  latitude             Float?        // WGS84 point latitude (from ESRI point geometry)
+  longitude            Float?        // WGS84 point longitude (from ESRI point geometry)
+  publicView           String        // Explicitly "Yes"
+  sourceUrl            String        // Direct REST query URL for the exact record
+  propertyId           String?       // Future linkage for parcel match
+  property             Property?     @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  matchStatus          String        @default("UNMATCHED") // UNMATCHED, MATCHED, AMBIGUOUS
+  latestSourceRecordId String?
+  latestSourceRecord   SourceRecord? @relation(fields: [latestSourceRecordId], references: [id], onDelete: SetNull)
+  firstSeenAt          DateTime      @default(now())
+  lastSeenAt           DateTime      @default(now())
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@index([requestId])
+  @@index([reportCategory])
+  @@index([status])
+  @@index([reportedAt])
+  @@index([propertyId])
+  @@index([latitude, longitude])
+  @@map("hotline_reports")
 }
