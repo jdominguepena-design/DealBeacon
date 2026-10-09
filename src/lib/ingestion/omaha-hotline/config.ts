@@ -40,9 +40,9 @@ export const OMAHA_HOTLINE_CONFIG = {
   excludedCategories: ['Homeless Encampment'],
 
   // Default query page size and timeout
-  defaultPageSize: 25,
+  defaultPageSize: 250,
   maxPageSize: 1000,
-  requestTimeoutMs: 15000,
+  requestTimeoutMs: 20000,
   maxRetries: 3,
 
   // Bounding box for Greater Omaha / Douglas County geographic validation (WGS84)

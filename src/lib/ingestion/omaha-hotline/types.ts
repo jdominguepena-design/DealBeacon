@@ -61,5 +61,12 @@ export interface NormalizedHotlineRecord {
   sanitizedPayload: ArcGISRawAttributes & {
     geometry?: ArcGISPointGeometry;
   };
+  contentHash: string;
   snapshotIdentifier: string;
+}
+
+export interface HotlineSourceEnvelope {
+  minObjectId: number;
+  maxObjectId: number;
+  totalEligibleCount: number;
 }

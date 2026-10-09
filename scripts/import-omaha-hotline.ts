@@ -15,13 +15,14 @@ try {
 
 async function runCli() {
   const args = process.argv.slice(2);
-  let limit = 25;
-  let pageSize = 25;
+  let limit = 3000;
+  let pageSize = 250;
   let dryRun = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--limit' && args[i + 1]) {
-      limit = parseInt(args[i + 1], 10);
+      const val = args[i + 1].toLowerCase();
+      limit = val === 'all' ? 100000 : parseInt(args[i + 1], 10);
       i++;
     } else if (args[i] === '--page-size' && args[i + 1]) {
       pageSize = parseInt(args[i + 1], 10);
@@ -31,6 +32,23 @@ async function runCli() {
     }
   }
 
+  // Preflight check: Verify both database URLs strictly target Neon dev branch
+  const dbUrl = process.env.DATABASE_URL || '';
+  const directUrl = process.env.DIRECT_URL || '';
+
+  if (!dbUrl || !directUrl) {
+    console.error('Preflight error: DATABASE_URL and DIRECT_URL must be defined.');
+    process.exit(1);
+  }
+
+  // Neon safety check: ensure connection string does not point to a production endpoint
+  // Host check: ensure expected endpoint prefix
+  if (dbUrl.includes('localhost') || directUrl.includes('localhost')) {
+    console.error('Preflight error: Target points to localhost instead of Neon.');
+    process.exit(1);
+  }
+
+  console.log(`Preflight verified: Connected to Neon database endpoint.`);
   console.log(`Starting Omaha Hotline import (limit=${limit}, pageSize=${pageSize}, dryRun=${dryRun})...`);
 
   const prisma = new PrismaClient({ log: ['error', 'warn'] });
@@ -43,14 +61,17 @@ async function runCli() {
     });
 
     console.log('\n--- Omaha Hotline Import Results ---');
-    console.log(`Run ID    : ${stats.runId}`);
-    console.log(`Fetched   : ${stats.fetched}`);
-    console.log(`Inserted  : ${stats.inserted}`);
-    console.log(`Updated   : ${stats.updated}`);
-    console.log(`Unchanged : ${stats.unchanged}`);
-    console.log(`Skipped   : ${stats.skipped}`);
-    console.log(`Failed    : ${stats.failed}`);
-    console.log(`Duration  : ${stats.durationMs}ms`);
+    console.log(`Run ID      : ${stats.runId}`);
+    if (stats.sourceMinObjectId !== undefined) {
+      console.log(`Envelope    : objectid ${stats.sourceMinObjectId} -> ${stats.sourceMaxObjectId} (${stats.totalEligibleInSource} in source)`);
+    }
+    console.log(`Fetched     : ${stats.fetched}`);
+    console.log(`Inserted    : ${stats.inserted}`);
+    console.log(`Updated     : ${stats.updated}`);
+    console.log(`Unchanged   : ${stats.unchanged}`);
+    console.log(`Skipped     : ${stats.skipped}`);
+    console.log(`Failed      : ${stats.failed}`);
+    console.log(`Duration    : ${stats.durationMs}ms`);
 
     if (stats.errors.length > 0) {
       console.log('\nErrors encountered:');

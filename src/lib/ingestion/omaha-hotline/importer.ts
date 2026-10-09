@@ -1,12 +1,13 @@
 import { PrismaClient } from '@prisma/client';
 import { OMAHA_HOTLINE_CONFIG } from './config';
-import { fetchHotlineFeatures } from './arcgis-client';
+import { fetchHotlineFeatures, fetchHotlineEnvelope } from './arcgis-client';
 import { normalizeHotlineFeature } from './normalize';
 
 export interface ImportHotlineOptions {
   limit?: number;
   pageSize?: number;
   dryRun?: boolean;
+  maxObjectId?: number;
 }
 
 export interface ImportHotlineStats {
@@ -19,6 +20,9 @@ export interface ImportHotlineStats {
   skipped: number;
   failed: number;
   durationMs: number;
+  sourceMinObjectId?: number;
+  sourceMaxObjectId?: number;
+  totalEligibleInSource?: number;
   errors: string[];
 }
 
@@ -31,8 +35,8 @@ export async function importOmahaHotlineRecords(
   options: ImportHotlineOptions = {}
 ): Promise<ImportHotlineStats> {
   const {
-    limit = 25,
-    pageSize = Math.min(options.limit || 25, OMAHA_HOTLINE_CONFIG.defaultPageSize),
+    limit = 3000,
+    pageSize = options.pageSize || OMAHA_HOTLINE_CONFIG.defaultPageSize,
     dryRun = false,
   } = options;
 
@@ -51,6 +55,22 @@ export async function importOmahaHotlineRecords(
     durationMs: 0,
     errors: [],
   };
+
+  // Step 1: Capture upper source envelope boundary before querying pages
+  let sourceUpperLimit: number | undefined = options.maxObjectId;
+  try {
+    const envelope = await fetchHotlineEnvelope();
+    stats.sourceMinObjectId = envelope.minObjectId;
+    stats.sourceMaxObjectId = envelope.maxObjectId;
+    stats.totalEligibleInSource = envelope.totalCount;
+
+    if (!sourceUpperLimit) {
+      sourceUpperLimit = envelope.maxObjectId;
+    }
+  } catch (envError) {
+    const msg = envError instanceof Error ? envError.message : String(envError);
+    stats.errors.push(`Notice: Could not query initial envelope stats (${msg}). Paging will proceed without fixed upper boundary.`);
+  }
 
   let ingestionRunCreated = false;
   if (!dryRun) {
@@ -81,6 +101,7 @@ export async function importOmahaHotlineRecords(
       const recordsToFetch = Math.min(pageSize, limit - stats.fetched);
       const { features } = await fetchHotlineFeatures({
         afterObjectId: lastObjectId,
+        maxObjectId: sourceUpperLimit,
         resultRecordCount: recordsToFetch,
       });
 
@@ -160,12 +181,12 @@ export async function importOmahaHotlineRecords(
 
             stats.inserted++;
           } else {
-            // Record exists: check if EditDate has changed
-            const existingEditTime = existingReport.sourceEditedAt?.getTime() ?? 0;
-            const incomingEditTime = normalized.sourceEditedAt?.getTime() ?? 0;
+            // Record exists: check if content snapshot has changed
+            const existingSnapshotId = existingReport.latestSourceRecord?.sourceRecordId;
+            const incomingSnapshotId = normalized.snapshotIdentifier;
 
-            if (incomingEditTime !== existingEditTime && incomingEditTime > 0) {
-              // Upstream record was edited: create new immutable SourceRecord snapshot
+            if (existingSnapshotId !== incomingSnapshotId) {
+              // Upstream record content or edit timestamp changed: create new immutable SourceRecord snapshot
               const sourceRecord = await prisma.sourceRecord.upsert({
                 where: {
                   sourceName_sourceRecordId: {

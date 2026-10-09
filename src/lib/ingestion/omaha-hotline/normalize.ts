@@ -1,5 +1,26 @@
+import { createHash } from 'crypto';
 import { OMAHA_HOTLINE_CONFIG } from './config';
 import { ArcGISFeature, NormalizedHotlineRecord } from './types';
+
+/**
+ * Computes a deterministic SHA-256 fingerprint from sanitized record attributes.
+ * This guarantees change detection even when EditDate is unbumped or null.
+ */
+export function computeContentFingerprint(payload: Record<string, any>): string {
+  const normalizedKeyValues = [
+    `cat:${payload.report_category ?? ''}`,
+    `prob:${payload.PROBTYPE ?? ''}`,
+    `loc:${payload.LOCDESC ?? ''}`,
+    `status:${payload.STATUS ?? ''}`,
+    `req:${payload.RequestID ?? ''}`,
+    `act:${payload.ACTDATE ?? ''}`,
+    `pub:${payload.PUBLICVIEW ?? ''}`,
+    `x:${payload.geometry?.x ?? ''}`,
+    `y:${payload.geometry?.y ?? ''}`,
+  ].join('|');
+
+  return createHash('sha256').update(normalizedKeyValues).digest('hex').substring(0, 16);
+}
 
 /**
  * Validates whether latitude and longitude lie within the Omaha metropolitan bounding box.
@@ -20,7 +41,7 @@ export function parseArcGISTimestamp(timestamp: number | null | undefined): Date
 
 /**
  * Normalizes an incoming raw ArcGIS feature into our schema DTO.
- * Excludes sensitive fields and handles date fallbacks.
+ * Excludes sensitive fields, handles date fallbacks, and computes content fingerprint.
  */
 export function normalizeHotlineFeature(feature: ArcGISFeature): NormalizedHotlineRecord | null {
   const { attributes, geometry } = feature;
@@ -66,10 +87,6 @@ export function normalizeHotlineFeature(feature: ArcGISFeature): NormalizedHotli
   // Source URL for exact record inspection
   const sourceUrl = `${OMAHA_HOTLINE_CONFIG.endpoint}?where=objectid%3D${attributes.objectid}&outFields=*&f=json`;
 
-  // Stable snapshot identifier: incorporates edit timestamp or creation timestamp
-  const versionTime = editDate?.getTime() ?? creationDate?.getTime() ?? 0;
-  const snapshotIdentifier = `${attributes.globalid}@${versionTime}`;
-
   // Build sanitized raw payload containing ONLY authorized fields
   const sanitizedPayload = {
     objectid: attributes.objectid,
@@ -86,6 +103,13 @@ export function normalizeHotlineFeature(feature: ArcGISFeature): NormalizedHotli
     PUBLICVIEW: attributes.PUBLICVIEW,
     ...(geometry ? { geometry: { x: geometry.x, y: geometry.y } } : {}),
   };
+
+  // Compute content fingerprint
+  const contentHash = computeContentFingerprint(sanitizedPayload);
+
+  // Snapshot identifier incorporates globalid and content fingerprint (stable across identical contents,
+  // changes if content changes, preserving immutability without unique constraint violations)
+  const snapshotIdentifier = `${attributes.globalid}@${contentHash}`;
 
   return {
     sourceName: OMAHA_HOTLINE_CONFIG.sourceName,
@@ -107,6 +131,7 @@ export function normalizeHotlineFeature(feature: ArcGISFeature): NormalizedHotli
     publicView: attributes.PUBLICVIEW || 'Yes',
     sourceUrl,
     sanitizedPayload,
+    contentHash,
     snapshotIdentifier,
   };
 }
