@@ -1,5 +1,5 @@
 /**
- * CLI script to execute the Omaha Hotline Importer manually.
+ * CLI script to execute the Omaha Hotline Importer directly in the foreground.
  *
  * Usage:
  *   npx tsx scripts/import-omaha-hotline.ts [--limit 25] [--page-size 25] [--dry-run]
@@ -16,8 +16,8 @@ try {
 
 async function runCli() {
   const args = process.argv.slice(2);
-  let limit = 3000;
-  let pageSize = 250;
+  let limit = 25; // Default safe limit
+  let pageSize = 25;
   let dryRun = false;
 
   for (let i = 0; i < args.length; i++) {
@@ -43,7 +43,7 @@ async function runCli() {
     process.exit(1);
   }
 
-  console.log(`Starting Omaha Hotline import (limit=${limit}, pageSize=${pageSize}, dryRun=${dryRun})...`);
+  console.log(`Starting Omaha Hotline import (limit=${limit}, pageSize=${pageSize}, dryRun=${dryRun})...\n`);
 
   const prisma = new PrismaClient({ log: ['error', 'warn'] });
 
@@ -52,6 +52,11 @@ async function runCli() {
       limit,
       pageSize,
       dryRun,
+      onProgress: (p) => {
+        console.log(
+          `  [Page ${p.page}] Fetched: ${p.fetched} | Ins: ${p.inserted} | Upd: ${p.updated} | Unchanged: ${p.unchanged} | Skip: ${p.skipped} | Fail: ${p.failed}`
+        );
+      },
     });
 
     console.log('\n--- Omaha Hotline Import Results ---');
@@ -71,9 +76,15 @@ async function runCli() {
       console.log('\nErrors encountered:');
       stats.errors.forEach((e) => console.log(`  - ${e}`));
     }
+
+    if (stats.failed > 0 && stats.inserted === 0 && stats.unchanged === 0) {
+      process.exitCode = 1;
+    } else {
+      process.exitCode = 0;
+    }
   } catch (err) {
     console.error('Fatal import error:', err);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     await prisma.$disconnect();
   }

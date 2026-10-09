@@ -8,6 +8,15 @@ export interface ImportHotlineOptions {
   pageSize?: number;
   dryRun?: boolean;
   maxObjectId?: number;
+  onProgress?: (info: {
+    page: number;
+    fetched: number;
+    inserted: number;
+    updated: number;
+    unchanged: number;
+    skipped: number;
+    failed: number;
+  }) => void;
 }
 
 export interface ImportHotlineStats {
@@ -29,6 +38,7 @@ export interface ImportHotlineStats {
 /**
  * Main importer orchestrator for Omaha Hotline records.
  * Ensures idempotent execution, snapshot provenance in SourceRecord, and tracking in IngestionRun.
+ * Includes graceful signal interception and incremental IngestionRun checkpointing to avoid stale RUNNING records.
  */
 export async function importOmahaHotlineRecords(
   prisma: PrismaClient,
@@ -38,6 +48,7 @@ export async function importOmahaHotlineRecords(
     limit = 3000,
     pageSize = options.pageSize || OMAHA_HOTLINE_CONFIG.defaultPageSize,
     dryRun = false,
+    onProgress,
   } = options;
 
   const startTime = Date.now();
@@ -93,11 +104,55 @@ export async function importOmahaHotlineRecords(
     }
   }
 
+  // Graceful signal handler to prevent orphaned RUNNING state
+  let isAborted = false;
+  const abortHandler = async (signalName: string) => {
+    if (isAborted) return;
+    isAborted = true;
+    console.log(`\n[Importer] Interruption signal received (${signalName}). Safely concluding IngestionRun in database...`);
+    if (ingestionRunCreated) {
+      try {
+        await prisma.ingestionRun.update({
+          where: { id: runId },
+          data: {
+            status: stats.inserted > 0 || stats.updated > 0 ? 'PARTIAL' : 'FAILED',
+            recordsIngested: stats.inserted + stats.updated,
+            completedAt: new Date(),
+            errorsJson: [`Process interrupted by ${signalName}`],
+            statsJson: {
+              ...stats,
+              interruptedBySignal: signalName,
+              interruptedAt: new Date().toISOString(),
+            } as any,
+          },
+        });
+      } catch (runAbortError) {
+        console.error('Failed to update IngestionRun on abort:', runAbortError);
+      }
+    }
+  };
+
+  const sigintListener = () => {
+    abortHandler('SIGINT').finally(() => {
+      prisma.$disconnect().finally(() => process.exit(130));
+    });
+  };
+  const sigtermListener = () => {
+    abortHandler('SIGTERM').finally(() => {
+      prisma.$disconnect().finally(() => process.exit(143));
+    });
+  };
+
+  process.on('SIGINT', sigintListener);
+  process.on('SIGTERM', sigtermListener);
+
   try {
     let lastObjectId = 0;
     let keepPaging = true;
+    let pageCount = 0;
 
-    while (keepPaging && stats.fetched < limit) {
+    while (keepPaging && stats.fetched < limit && !isAborted) {
+      pageCount++;
       const recordsToFetch = Math.min(pageSize, limit - stats.fetched);
       const { features } = await fetchHotlineFeatures({
         afterObjectId: lastObjectId,
@@ -112,6 +167,8 @@ export async function importOmahaHotlineRecords(
       stats.fetched += features.length;
 
       for (const feature of features) {
+        if (isAborted) break;
+
         if (feature.attributes?.objectid) {
           lastObjectId = Math.max(lastObjectId, feature.attributes.objectid);
         }
@@ -243,6 +300,30 @@ export async function importOmahaHotlineRecords(
         }
       }
 
+      // Checkpoint incremental progress to IngestionRun in database
+      if (!dryRun && ingestionRunCreated) {
+        try {
+          await prisma.ingestionRun.update({
+            where: { id: runId },
+            data: {
+              recordsIngested: stats.inserted + stats.updated,
+            },
+          });
+        } catch {
+          // Non-fatal checkpoint failure
+        }
+      }
+
+      onProgress?.({
+        page: pageCount,
+        fetched: stats.fetched,
+        inserted: stats.inserted,
+        updated: stats.updated,
+        unchanged: stats.unchanged,
+        skipped: stats.skipped,
+        failed: stats.failed,
+      });
+
       if (features.length < pageSize) {
         keepPaging = false;
       }
@@ -251,9 +332,12 @@ export async function importOmahaHotlineRecords(
     const msg = err instanceof Error ? err.message : String(err);
     stats.errors.push(`Batch pagination error: ${msg}`);
   } finally {
+    process.off('SIGINT', sigintListener);
+    process.off('SIGTERM', sigtermListener);
+
     stats.durationMs = Date.now() - startTime;
 
-    if (!dryRun && ingestionRunCreated) {
+    if (!dryRun && ingestionRunCreated && !isAborted) {
       try {
         await prisma.ingestionRun.update({
           where: { id: runId },
