@@ -17,6 +17,12 @@ export type ConfidenceLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 
 export type IngestionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'PARTIAL';
 
+export type MunicipalJurisdiction =
+  | 'INSIDE_OMAHA'
+  | 'OUTSIDE_OMAHA'
+  | 'CROSSES_BOUNDARY'
+  | 'UNRESOLVED';
+
 export type PropertyType = 'SINGLE_FAMILY' | 'MULTI_FAMILY' | 'COMMERCIAL' | 'VACANT_LOT';
 
 export interface ScoreFactor {
@@ -182,4 +188,5 @@ export interface PropertyDTO {
   events?: PropertyEventDTO[];
   savedProperties?: SavedPropertyDTO[];
   notes?: PropertyNoteDTO[];
+  municipalJurisdiction?: MunicipalJurisdiction;
 }

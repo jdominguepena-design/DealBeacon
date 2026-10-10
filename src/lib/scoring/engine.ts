@@ -6,7 +6,9 @@ import {
   CodeViolationDTO,
   OwnershipRecordDTO,
   SignalDTO,
+  MunicipalJurisdiction,
 } from '@/types';
+import { isInvestorEligible } from '../geo/eligibility';
 
 export interface PropertyScoreContext {
   ownership?: OwnershipRecordDTO | null;
@@ -14,6 +16,7 @@ export interface PropertyScoreContext {
   codeViolations?: CodeViolationDTO[];
   signals?: SignalDTO[];
   referenceDate?: Date;
+  municipalJurisdiction?: MunicipalJurisdiction | string | null;
 }
 
 export interface ScoreCalculationResult {
@@ -32,6 +35,23 @@ export interface ScoreCalculationResult {
 export function calculateOpportunityScore(
   context: PropertyScoreContext
 ): ScoreCalculationResult {
+  // Fail-closed safeguard: strictly reject every context whose municipalJurisdiction is not explicitly INSIDE_OMAHA.
+  // Missing (undefined), null, blank, OUTSIDE_OMAHA, CROSSES_BOUNDARY, UNRESOLVED, or unrecognized values yield score 0.
+  if (!isInvestorEligible({ municipalJurisdiction: context.municipalJurisdiction })) {
+    return {
+      totalScore: 0,
+      dataConfidence: 'LOW',
+      breakdown: [],
+      categoryTotals: {
+        financial: 0,
+        property: 0,
+        ownership: 0,
+        recency: 0,
+        compound: 0,
+      },
+    };
+  }
+
   const refDate = context.referenceDate || new Date();
   const breakdown: ScoreFactor[] = [];
 

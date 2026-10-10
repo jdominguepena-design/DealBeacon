@@ -18,7 +18,16 @@
     "verify:hotline": "tsx scripts/verify-hotline-import.ts",
     "reconcile:runs": "tsx scripts/reconcile-stale-runs.ts",
     "test:preflight": "tsx src/lib/__tests__/neon-preflight.test.ts",
-    "test:recovery": "tsx src/lib/ingestion/recovery/__tests__/stale-run-recovery.test.ts"
+    "test:recovery": "tsx src/lib/ingestion/recovery/__tests__/stale-run-recovery.test.ts",
+    "test:parcel": "tsx src/lib/ingestion/douglas-parcel/__tests__/douglas-parcel.test.ts",
+    "test:batch-failure": "tsx src/lib/ingestion/douglas-parcel/__tests__/failure-recovery.test.ts",
+    "test:boundary": "tsx src/lib/geo/__tests__/municipal-boundary.test.ts",
+    "test:eligibility": "tsx src/lib/geo/__tests__/eligibility.test.ts",
+    "test:repository": "tsx src/lib/repositories/__tests__/property-repository.test.ts",
+    "test:e2e:properties": "tsx tests/e2e/properties-acceptance.e2e.ts",
+    "test:e2e:dashboard": "tsx tests/e2e/dashboard-acceptance.e2e.ts",
+    "test:e2e": "tsx tests/e2e/dashboard-acceptance.e2e.ts && tsx tests/e2e/properties-acceptance.e2e.ts",
+    "import:parcels": "tsx scripts/import-douglas-parcels.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
@@ -31,6 +40,8 @@
     "tailwind-merge": "^3.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@turf/turf": "^7.4.0",
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

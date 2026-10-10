@@ -1,64 +1,31 @@
 'use client';
 
-import React, { useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
-import { PropertyDTO } from '@/types';
-import { ScoreBadge } from '../ui/ScoreBadge';
-import { ConfidencePill } from '../ui/ConfidencePill';
-import { SignalBadge } from '../ui/SignalBadge';
+import { RealPropertySummaryDTO } from '@/lib/repositories/property-repository';
 import {
-  Bookmark,
   Building,
-  Check,
-  ChevronRight,
   ExternalLink,
   MapPin,
-  Receipt,
-  FileWarning,
+  HelpCircle,
+  Landmark,
+  Briefcase,
+  User,
+  Layers,
 } from 'lucide-react';
 
 interface PropertyTableProps {
-  properties: PropertyDTO[];
-  userId: string;
+  properties: RealPropertySummaryDTO[];
 }
 
-export function PropertyTable({ properties, userId }: PropertyTableProps) {
-  const [savedIds, setSavedIds] = useState<Set<string>>(
-    new Set(
-      properties
-        .filter((p) => p.savedProperties && p.savedProperties.length > 0)
-        .map((p) => p.id)
-    )
-  );
-
-  const handleToggleSave = async (propertyId: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      const res = await fetch(`/api/properties/${propertyId}/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'RESEARCHING' }),
-      });
-      const data = await res.json();
-      setSavedIds((prev) => {
-        const next = new Set(prev);
-        if (data.isSaved) next.add(propertyId);
-        else next.delete(propertyId);
-        return next;
-      });
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
+export function PropertyTable({ properties }: PropertyTableProps) {
   if (properties.length === 0) {
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center">
         <Building className="w-12 h-12 text-slate-600 mx-auto mb-3" />
         <h3 className="text-base font-bold text-white">No properties match your active filters</h3>
         <p className="text-xs text-slate-400 mt-1">
-          Try clearing search terms or selecting fewer distress filters to expand the Omaha dataset.
+          Try clearing search terms or resetting filters to explore the real Douglas County Omaha dataset.
         </p>
       </div>
     );
@@ -70,153 +37,179 @@ export function PropertyTable({ properties, userId }: PropertyTableProps) {
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
-              <th className="py-3.5 px-4">Score</th>
               <th className="py-3.5 px-4">Property & PIN</th>
-              <th className="py-3.5 px-4">Confidence</th>
-              <th className="py-3.5 px-4">Ownership</th>
-              <th className="py-3.5 px-4">Distress Signals</th>
-              <th className="py-3.5 px-4">Est. Valuation & Equity</th>
-              <th className="py-3.5 px-4 text-right">Actions</th>
+              <th className="py-3.5 px-4">Property Classification</th>
+              <th className="py-3.5 px-4">Ownership & Category</th>
+              <th className="py-3.5 px-4">Absentee Status</th>
+              <th className="py-3.5 px-4">Physical Attributes</th>
+              <th className="py-3.5 px-4 text-right">Official County Links</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/70 text-slate-300">
             {properties.map((prop) => {
-              const isSaved = savedIds.has(prop.id);
-              const owner = prop.ownershipRecords?.[0];
-              const taxDelinquent = prop.taxRecords?.find((t) => t.isDelinquent);
-              const totalDelinquent = prop.taxRecords?.reduce(
-                (s, t) => s + (t.amountDelinquent || 0),
-                0
-              ) || 0;
-              const openViolations = prop.codeViolations?.filter(
-                (v) => v.status !== 'RESOLVED' && v.status !== 'CLOSED'
-              ) || [];
+              const owner = prop.owner;
+              const hasAddress = prop.hasAuthoritativeAddress;
 
               return (
                 <tr
                   key={prop.id}
                   className="hover:bg-slate-800/40 transition group"
                 >
-                  {/* Score */}
-                  <td className="py-4 px-4 align-top">
-                    <ScoreBadge score={prop.opportunityScore} size="md" />
-                  </td>
-
                   {/* Property & PIN */}
-                  <td className="py-4 px-4 align-top space-y-1 min-w-[200px]">
-                    <Link
-                      href={`/properties/${prop.id}`}
-                      className="font-bold text-white hover:text-amber-400 text-sm block transition"
-                    >
-                      {prop.address}
-                    </Link>
+                  <td className="py-4 px-4 align-top space-y-1 min-w-[220px]">
+                    {hasAddress ? (
+                      <div className="font-bold text-white text-sm block">
+                        {prop.address}
+                      </div>
+                    ) : (
+                      <div className="text-slate-400 text-xs italic">
+                        Address not assigned
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 text-slate-400 text-[11px]">
-                      <span className="font-mono bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                      <span className="font-mono bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 text-amber-300 font-medium">
                         PIN: {prop.parcelId}
                       </span>
-                      <span>{prop.neighborhood || 'Omaha'}</span>
+                      <span>{prop.city}, {prop.state}</span>
                     </div>
                   </td>
 
-                  {/* Confidence */}
-                  <td className="py-4 px-4 align-top">
-                    <ConfidencePill level={prop.dataConfidence} />
+                  {/* Property Classification */}
+                  <td className="py-4 px-4 align-top space-y-1 min-w-[160px]">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-800 text-slate-200 border border-slate-700">
+                      {prop.propertyType.replace('_', ' ')}
+                    </span>
+                    {prop.countyClass && (
+                      <div className="text-[11px] text-slate-400">
+                        Class: <span className="font-mono font-medium text-slate-300">{prop.countyClass}</span>
+                      </div>
+                    )}
                   </td>
 
-                  {/* Ownership */}
-                  <td className="py-4 px-4 align-top space-y-1 min-w-[180px]">
-                    <div className="font-semibold text-slate-200 truncate">
-                      {owner?.ownerName || 'Synthetic Owner'}
+                  {/* Ownership & Category */}
+                  <td className="py-4 px-4 align-top space-y-1 min-w-[200px]">
+                    <div className="font-semibold text-slate-200">
+                      {owner?.ownerName || 'Public Record Unspecified'}
                     </div>
-                    <div className="text-[11px] text-slate-400">
-                      {owner?.isOutOfState ? (
-                        <span className="text-sky-400 font-semibold">
-                          Absentee ({owner.mailingState})
+
+                    <div className="flex items-center gap-1.5">
+                      {owner?.ownerClassification === 'GOVERNMENT_OR_PUBLIC' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-indigo-300 bg-indigo-950/70 px-2 py-0.5 rounded border border-indigo-800">
+                          <Landmark className="w-3 h-3 text-indigo-400" />
+                          Government / Public Agency
                         </span>
-                      ) : owner?.isAbsentee ? (
-                        <span className="text-sky-300 font-medium">
-                          Absentee (NE)
+                      ) : owner?.ownerClassification === 'PROBABLE_BUSINESS' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-amber-300 bg-amber-950/70 px-2 py-0.5 rounded border border-amber-800" title="Estimated based on entity tokens in county deed record">
+                          <Briefcase className="w-3 h-3 text-amber-400" />
+                          Probable Business / Entity
+                          <span className="text-[9px] uppercase tracking-wider text-amber-400/80">(Est.)</span>
+                        </span>
+                      ) : owner?.ownerClassification === 'PROBABLE_INDIVIDUAL' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-300 bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-800" title="Estimated based on absence of corporate entity tokens">
+                          <User className="w-3 h-3 text-emerald-400" />
+                          Probable Individual
+                          <span className="text-[9px] uppercase tracking-wider text-emerald-400/80">(Est.)</span>
                         </span>
                       ) : (
-                        <span className="text-slate-400">Owner Occupied</span>
-                      )}
-                      {owner?.ownershipYears && (
-                        <span className="ml-1.5">• {Math.round(owner.ownershipYears)} yrs tenure</span>
+                        <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                          <HelpCircle className="w-3 h-3 text-slate-500" />
+                          Classification Unknown
+                        </span>
                       )}
                     </div>
                   </td>
 
-                  {/* Distress Signals */}
-                  <td className="py-4 px-4 align-top min-w-[220px]">
-                    <div className="flex flex-wrap gap-1">
-                      {totalDelinquent > 0 && (
-                        <SignalBadge
-                          type="TAX_DELINQUENT"
-                          label={`Tax Due $${totalDelinquent.toLocaleString()}`}
-                          size="sm"
-                        />
-                      )}
-                      {openViolations.length > 0 && (
-                        <SignalBadge
-                          type="CODE_VIOLATION"
-                          label={`${openViolations.length} Code Case${
-                            openViolations.length > 1 ? 's' : ''
-                          }`}
-                          size="sm"
-                        />
-                      )}
-                      {prop.signals
-                        ?.filter((s) => s.signalType === 'VACANCY_INDICATOR')
-                        .map((s) => (
-                          <SignalBadge
-                            key={s.id}
-                            type="VACANCY_INDICATOR"
-                            label="Vacant / Boarded"
-                            size="sm"
-                          />
-                        ))}
-                    </div>
+                  {/* Absentee Status */}
+                  <td className="py-4 px-4 align-top space-y-1 min-w-[170px]">
+                    {owner?.absenteeStatus === 'ABSENTEE' ? (
+                      <div className="space-y-0.5">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-950 text-sky-300 border border-sky-800">
+                          Likely absentee — based on mailing records
+                        </span>
+                        {owner.outOfStateStatus === 'OUT_OF_STATE' && (
+                          <div className="text-[10px] text-sky-400 font-medium">Out of State</div>
+                        )}
+                      </div>
+                    ) : owner?.absenteeStatus === 'OWNER_OCCUPIED' ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                        Mailing address matches property
+                      </span>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 italic">
+                        Not Confirmed (Unknown)
+                      </div>
+                    )}
+
+                    {owner?.hasSeparateMailingAddress && (
+                      <div className="text-[10px] text-slate-400">
+                        • Separate mailing address on file
+                      </div>
+                    )}
                   </td>
 
-                  {/* Valuation & Equity */}
-                  <td className="py-4 px-4 align-top space-y-0.5 min-w-[150px]">
-                    <div className="font-bold text-white">
-                      ${(prop.estimatedValue || prop.assessedValue || 0).toLocaleString()}
-                      <span className="text-[10px] text-slate-400 font-normal ml-1">(Est.)</span>
+                  {/* Physical Attributes */}
+                  <td className="py-4 px-4 align-top space-y-0.5 min-w-[170px] text-slate-300">
+                    <div className="text-xs">
+                      {prop.squareFeet ? (
+                        <span><strong className="text-white">{prop.squareFeet.toLocaleString()}</strong> sq ft</span>
+                      ) : (
+                        <span className="text-slate-500">No building recorded</span>
+                      )}
                     </div>
                     <div className="text-[11px] text-slate-400">
-                      Assessed: ${(prop.assessedValue || 0).toLocaleString()}
+                      {prop.yearBuilt ? (
+                        <span>Built: <strong className="text-slate-300">{prop.yearBuilt}</strong></span>
+                      ) : (
+                        <span>Year: unlisted</span>
+                      )}
+                      {prop.lotSizeSqFt && (
+                        <span> • Lot: {prop.lotSizeSqFt.toLocaleString()} sq ft</span>
+                      )}
                     </div>
-                    <div className="text-[11px] text-emerald-400 font-semibold">
-                      {Math.round((prop.estimatedEquityPct || 0) * 100)}% Est. Equity
-                    </div>
+                    {(prop.condition || prop.quality) && (
+                      <div className="text-[10px] text-slate-400">
+                        {prop.condition && <span>Cond: {prop.condition}</span>}
+                        {prop.condition && prop.quality && <span> | </span>}
+                        {prop.quality && <span>Qual: {prop.quality}</span>}
+                      </div>
+                    )}
                   </td>
 
-                  {/* Actions */}
+                  {/* Actions / County Links */}
                   <td className="py-4 px-4 align-top text-right shrink-0">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <button
-                        onClick={(e) => handleToggleSave(prop.id, e)}
-                        className={`p-2 rounded-lg border transition ${
-                          isSaved
-                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
-                        }`}
-                        title={isSaved ? 'Lead Saved' : 'Save Lead'}
-                      >
-                        {isSaved ? (
-                          <Check className="w-3.5 h-3.5 text-amber-400" />
-                        ) : (
-                          <Bookmark className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                    <div className="flex flex-col items-end gap-1.5">
                       <Link
                         href={`/properties/${prop.id}`}
-                        className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1 transition shadow-xs"
+                        className="inline-flex items-center gap-1 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 px-2.5 py-1 rounded transition shadow-xs"
                       >
                         <span>Details</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
                       </Link>
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        {prop.assessorUrl && (
+                          <a
+                            href={prop.assessorUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-amber-400 hover:text-amber-300 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 hover:border-amber-500/50 transition"
+                            title="Official Douglas County Assessor Beacon"
+                          >
+                            <span>Assessor</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        {prop.treasurerUrl && (
+                          <a
+                            href={prop.treasurerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-white bg-slate-950 px-2 py-0.5 rounded border border-slate-800 hover:border-slate-700 transition"
+                            title="Official Douglas County Treasurer Tax Information"
+                          >
+                            <span>Treasurer</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
                     </div>
                   </td>
                 </tr>

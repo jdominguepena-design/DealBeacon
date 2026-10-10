@@ -3,6 +3,13 @@ import { SESSION_COOKIE_NAME } from '@/lib/auth';
 import { UserRole } from '@/types';
 
 export async function POST(req: NextRequest) {
+  if (process.env.NODE_ENV !== 'development') {
+    return NextResponse.json(
+      { error: 'Role switching is disabled outside local development environment.' },
+      { status: 403 }
+    );
+  }
+
   try {
     const { role } = await req.json();
     if (role !== 'INVESTOR' && role !== 'ADMIN') {
@@ -22,3 +29,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
+

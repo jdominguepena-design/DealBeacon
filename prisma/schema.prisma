@@ -50,6 +50,13 @@ enum IngestionStatus {
   PARTIAL
 }
 
+enum MunicipalJurisdiction {
+  INSIDE_OMAHA
+  OUTSIDE_OMAHA
+  CROSSES_BOUNDARY
+  UNRESOLVED
+}
+
 model User {
   id              String          @id @default(cuid())
   email           String          @unique
@@ -87,6 +94,20 @@ model Property {
   scoreBreakdownJson  Json?           // Structured array of contributing factors
   lastScoredAt        DateTime?
   
+  // County GIS & Assessment extensions (Additive)
+  countyClass         String?         // Raw Douglas County CLASS ('R', 'C', 'M', 'I', etc.)
+  dcaAccountType      String?         // Douglas County Assessor Account Type (DCAACCTYPE)
+  condition           String?         // Assessor condition code
+  quality             String?         // Assessor quality rating
+  legalDescription    String?         // Consolidated ADDITION_N, BLOCK, LOT, LEGAL1
+  assessorUrl         String?         // Direct portal link to County Assessor
+  treasurerUrl        String?         // Direct portal link to County Treasurer
+  latitude            Float?          // WGS84 Centroid Latitude
+  longitude           Float?          // WGS84 Centroid Longitude
+  geometryGeoJson     Json?           // WGS84 Boundary Polygon coordinates
+  hasAuthoritativeAddress Boolean     @default(true) // false when source parcel situs address was missing or unassigned
+  municipalJurisdiction   MunicipalJurisdiction @default(UNRESOLVED) // Fails closed to UNRESOLVED, never auto-eligible
+  
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
 
@@ -105,6 +126,8 @@ model Property {
   @@index([opportunityScore])
   @@index([neighborhood])
   @@index([zip])
+  @@index([latitude, longitude])
+  @@index([municipalJurisdiction])
   @@map("properties")
 }
 
@@ -120,6 +143,12 @@ model OwnershipRecord {
   isAbsentee      Boolean   @default(false)
   isOutOfState    Boolean   @default(false)
   isCorporate     Boolean   @default(false)
+  
+  // Conservative Ownership Evaluation Status (Additive)
+  absenteeStatus   String?   // "ABSENTEE" | "OWNER_OCCUPIED" | "UNKNOWN"
+  outOfStateStatus String?   // "OUT_OF_STATE" | "IN_STATE" | "UNKNOWN"
+  corporateStatus  String?   // "CONFIRMED_CORPORATE" | "INDIVIDUAL" | "UNKNOWN"
+
   purchaseDate    DateTime?
   purchasePrice   Float?
   deedType        String?   // Warranty Deed, Quitclaim, Sheriff's Deed
@@ -305,7 +334,14 @@ model HotlineReport {
   sourceUrl            String        // Direct REST query URL for the exact record
   propertyId           String?       // Future linkage for parcel match
   property             Property?     @relation(fields: [propertyId], references: [id], onDelete: SetNull)
-  matchStatus          String        @default("UNMATCHED") // UNMATCHED, MATCHED, AMBIGUOUS
+  matchStatus          String        @default("UNMATCHED") // UNMATCHED, CONFIRMED, PROBABLE_UNRESOLVED, AMBIGUOUS_MULTI_PARCEL, AMBIGUOUS_CONFLICT, EXCLUDED_INFRASTRUCTURE
+  
+  // Conservative Match Audit (Additive)
+  matchMethod          String?       // "EXACT_ADDR_AND_POLYGON" | "UNRESOLVED"
+  matchConfidence      String?       // "CONFIRMED" | "UNRESOLVED" | "EXCLUDED_INFRASTRUCTURE"
+  matchAuditJson       Json?         // Structured audit payload explaining decision
+  matchedAt            DateTime?
+
   latestSourceRecordId String?
   latestSourceRecord   SourceRecord? @relation(fields: [latestSourceRecordId], references: [id], onDelete: SetNull)
   firstSeenAt          DateTime      @default(now())
@@ -319,5 +355,6 @@ model HotlineReport {
   @@index([reportedAt])
   @@index([propertyId])
   @@index([latitude, longitude])
+  @@index([matchStatus])
   @@map("hotline_reports")
 }

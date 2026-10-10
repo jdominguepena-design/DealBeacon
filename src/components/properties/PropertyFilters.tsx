@@ -2,19 +2,18 @@
 
 import React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Filter, RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
+import { Filter, RotateCcw, Search, Building2, UserCheck } from 'lucide-react';
 
 interface PropertyFiltersProps {
   currentFilters: {
     query?: string;
-    minScore?: string | number;
-    neighborhood?: string;
     propertyType?: string;
-    isAbsentee?: string;
-    hasTax?: string | boolean;
-    hasCode?: string | boolean;
-    hasVacancy?: string | boolean;
-    sortBy?: string;
+    hasBuilding?: string;
+    minYearBuilt?: string;
+    maxYearBuilt?: string;
+    corporateStatus?: string;
+    absenteeStatus?: string;
+    hasAuthoritativeAddress?: string;
   };
 }
 
@@ -24,6 +23,7 @@ export function PropertyFilters({ currentFilters }: PropertyFiltersProps) {
 
   const updateParam = (key: string, value: string | null) => {
     const params = new URLSearchParams(searchParams.toString());
+    params.delete('page'); // Reset to page 1 on filter modification
     if (value === null || value === '' || value === 'ALL') {
       params.delete(key);
     } else {
@@ -36,14 +36,16 @@ export function PropertyFilters({ currentFilters }: PropertyFiltersProps) {
     router.push('/properties');
   };
 
-  const neighborhoods = [
+  const propertyTypes = [
     'ALL',
-    'North Omaha',
-    'South Omaha',
-    'Benson',
-    'Dundee',
-    'Florence',
-    'Millard',
+    'RESIDENTIAL',
+    'COMMERCIAL',
+    'TAX_EXEMPT',
+    'UTILITY',
+    'INDUSTRIAL',
+    'MULTI_FAMILY',
+    'AGRICULTURAL',
+    'CONDOMINIUM',
   ];
 
   return (
@@ -54,51 +56,50 @@ export function PropertyFilters({ currentFilters }: PropertyFiltersProps) {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search address, Douglas County PIN, owner name, or zip..."
-            defaultValue={currentFilters.query || ''}
-            onChange={(e) => updateParam('query', e.target.value || null)}
+            placeholder="Search address, Douglas County PIN, or owner name..."
+            value={currentFilters.query ?? ''}
+            onChange={(e) => updateParam('query', e.target.value.trim() ? e.target.value : null)}
             className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
           />
         </div>
 
         {/* Quick Filters */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Neighborhood */}
+          {/* Property Type */}
           <select
-            value={currentFilters.neighborhood || 'ALL'}
-            onChange={(e) => updateParam('neighborhood', e.target.value)}
+            value={currentFilters.propertyType || 'ALL'}
+            onChange={(e) => updateParam('propertyType', e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-amber-500"
           >
-            <option value="ALL">All Omaha Neighborhoods</option>
-            {neighborhoods.filter((n) => n !== 'ALL').map((n) => (
-              <option key={n} value={n}>
-                {n}
+            <option value="ALL">All Property Types</option>
+            {propertyTypes.filter((t) => t !== 'ALL').map((t) => (
+              <option key={t} value={t}>
+                {t.replace('_', ' ')}
               </option>
             ))}
           </select>
 
-          {/* Absentee Selector */}
+          {/* Building Presence */}
           <select
-            value={currentFilters.isAbsentee || 'ALL'}
-            onChange={(e) => updateParam('isAbsentee', e.target.value)}
+            value={currentFilters.hasBuilding || 'ALL'}
+            onChange={(e) => updateParam('hasBuilding', e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-amber-500"
           >
-            <option value="ALL">All Ownership Types</option>
-            <option value="out_of_state">Absentee (Out-of-State)</option>
-            <option value="in_state">Absentee (In-State)</option>
-            <option value="any">Any Absentee</option>
+            <option value="ALL">All Land & Improvements</option>
+            <option value="true">With Improvement / Building</option>
+            <option value="false">No building recorded</option>
           </select>
 
-          {/* Sort By */}
+          {/* Absentee Selector */}
           <select
-            value={currentFilters.sortBy || 'score_desc'}
-            onChange={(e) => updateParam('sortBy', e.target.value)}
+            value={currentFilters.absenteeStatus || 'ALL'}
+            onChange={(e) => updateParam('absenteeStatus', e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-amber-500"
           >
-            <option value="score_desc">Opportunity Score (Highest)</option>
-            <option value="score_asc">Opportunity Score (Lowest)</option>
-            <option value="delinquent_desc">Tax Delinquent Amount</option>
-            <option value="value_desc">Estimated Market Value</option>
+            <option value="ALL">All Absentee Classifications</option>
+            <option value="ABSENTEE">Likely absentee — based on mailing records (419)</option>
+            <option value="OWNER_OCCUPIED">Mailing address matches property (1)</option>
+            <option value="UNKNOWN">Unconfirmed / Unknown (2,419)</option>
           </select>
 
           <button
@@ -112,56 +113,52 @@ export function PropertyFilters({ currentFilters }: PropertyFiltersProps) {
         </div>
       </div>
 
-      {/* Distress Signal Quick Toggle Tills */}
-      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/80">
-        <span className="text-xs font-semibold text-slate-400 mr-1 flex items-center gap-1">
-          <Filter className="w-3.5 h-3.5" />
-          <span>Distress Toggles:</span>
-        </span>
+      {/* Secondary Toggles and Year Range */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/80 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-slate-400 mr-1 flex items-center gap-1">
+            <Filter className="w-3.5 h-3.5" />
+            <span>Ownership Filter:</span>
+          </span>
 
-        <button
-          onClick={() => updateParam('hasTax', currentFilters.hasTax ? null : 'true')}
-          className={`px-3 py-1 rounded-md text-xs font-semibold border transition ${
-            currentFilters.hasTax
-              ? 'bg-rose-950 text-rose-300 border-rose-600'
-              : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
-          }`}
-        >
-          {currentFilters.hasTax ? '✓ Tax Delinquent' : '+ Tax Delinquent'}
-        </button>
+          <button
+            onClick={() =>
+              updateParam(
+                'corporateStatus',
+                currentFilters.corporateStatus === 'PROBABLE_CORPORATE_NAME' ? null : 'PROBABLE_CORPORATE_NAME'
+              )
+            }
+            className={`px-3 py-1 rounded-md text-xs font-semibold border transition ${
+              currentFilters.corporateStatus === 'PROBABLE_CORPORATE_NAME'
+                ? 'bg-amber-950 text-amber-300 border-amber-600'
+                : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
+            }`}
+          >
+            {currentFilters.corporateStatus === 'PROBABLE_CORPORATE_NAME'
+              ? '✓ Probable Corporate / Entity'
+              : '+ Probable Corporate / Entity'}
+          </button>
+        </div>
 
-        <button
-          onClick={() => updateParam('hasCode', currentFilters.hasCode ? null : 'true')}
-          className={`px-3 py-1 rounded-md text-xs font-semibold border transition ${
-            currentFilters.hasCode
-              ? 'bg-amber-950 text-amber-300 border-amber-600'
-              : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
-          }`}
-        >
-          {currentFilters.hasCode ? '✓ Code Violations' : '+ Code Violations'}
-        </button>
-
-        <button
-          onClick={() => updateParam('hasVacancy', currentFilters.hasVacancy ? null : 'true')}
-          className={`px-3 py-1 rounded-md text-xs font-semibold border transition ${
-            currentFilters.hasVacancy
-              ? 'bg-purple-950 text-purple-300 border-purple-600'
-              : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
-          }`}
-        >
-          {currentFilters.hasVacancy ? '✓ Vacancy Indicator' : '+ Vacancy Indicator'}
-        </button>
-
-        <button
-          onClick={() => updateParam('minScore', currentFilters.minScore === 80 ? null : '80')}
-          className={`px-3 py-1 rounded-md text-xs font-semibold border transition ${
-            currentFilters.minScore === 80
-              ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
-              : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
-          }`}
-        >
-          {currentFilters.minScore === 80 ? '✓ High Score (80+)' : '+ Score 80+'}
-        </button>
+        {/* Year Built Filter */}
+        <div className="flex items-center gap-2 text-slate-400">
+          <span className="text-[11px] font-medium">Year Built:</span>
+          <input
+            type="number"
+            placeholder="Min"
+            value={currentFilters.minYearBuilt ?? ''}
+            onChange={(e) => updateParam('minYearBuilt', e.target.value.trim() ? e.target.value : null)}
+            className="w-16 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-500"
+          />
+          <span>–</span>
+          <input
+            type="number"
+            placeholder="Max"
+            value={currentFilters.maxYearBuilt ?? ''}
+            onChange={(e) => updateParam('maxYearBuilt', e.target.value.trim() ? e.target.value : null)}
+            className="w-16 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-500"
+          />
+        </div>
       </div>
     </div>
   );

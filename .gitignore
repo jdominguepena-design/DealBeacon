@@ -20,3 +20,8 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Playwright & Browser Testing Artifacts
+testing-artifacts/
+playwright-report/
+test-results/

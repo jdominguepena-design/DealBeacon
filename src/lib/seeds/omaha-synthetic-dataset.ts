@@ -937,6 +937,7 @@ export function buildSyntheticOmahaDataset(): {
       codeViolations: violationDTOs,
       signals: propertySignals,
       referenceDate: new Date('2025-08-28T00:00:00.000Z'),
+      municipalJurisdiction: 'INSIDE_OMAHA',
     });
 
     // 7. Synthesize Derived Chronological Property Events
@@ -979,6 +980,7 @@ export function buildSyntheticOmahaDataset(): {
       events,
       savedProperties: [],
       notes: [],
+      municipalJurisdiction: 'INSIDE_OMAHA',
     });
   }
 

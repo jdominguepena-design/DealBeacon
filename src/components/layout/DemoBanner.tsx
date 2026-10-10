@@ -13,13 +13,13 @@ export function DemoBanner() {
       <div className="flex items-center gap-2 max-w-6xl mx-auto w-full">
         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
         <span className="font-semibold text-amber-300">
-          SYNTHETIC DEMO ENVIRONMENT (Omaha MVP):
+          PUBLIC RECORDS PREVIEW (Omaha):
         </span>
         <span className="text-amber-200/90 hidden sm:inline">
-          All property ownership entities, code violation citations, and tax delinquency records are strictly synthetic demo fixtures. Estimated market values, equity, and absentee determinations are inferred model estimates, not official county records.
+          Parcels, property specs, and deed grantee names reflect real Douglas County public records. Multi-signal distress scoring, tax-delinquency tracking, and code enforcement convergence features remain under active validation and are not yet released.
         </span>
         <span className="text-amber-200/90 sm:hidden">
-          All records and distress signals are synthetic demo data.
+          Real Douglas County public records. Distress scoring & tracking features in active development.
         </span>
       </div>
       <button

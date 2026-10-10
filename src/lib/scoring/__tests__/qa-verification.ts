@@ -117,6 +117,7 @@ function runQATestSuite() {
       },
     ],
     referenceDate: new Date('2025-08-28'),
+    municipalJurisdiction: 'INSIDE_OMAHA',
   };
 
   const extremeRes = calculateOpportunityScore(extremeContext);
@@ -153,6 +154,7 @@ function runQATestSuite() {
       },
     ],
     referenceDate: refDate,
+    municipalJurisdiction: 'INSIDE_OMAHA',
   };
   const rec30Res = calculateOpportunityScore(recent30Context);
   assert(rec30Res.categoryTotals.recency === 10, `Signal 10 days old yields +10 recency points (Actual: ${rec30Res.categoryTotals.recency})`);
@@ -176,6 +178,7 @@ function runQATestSuite() {
       },
     ],
     referenceDate: refDate,
+    municipalJurisdiction: 'INSIDE_OMAHA',
   };
   const rec90Res = calculateOpportunityScore(recent90Context);
   assert(rec90Res.categoryTotals.recency === 5, `Signal 60 days old yields +5 recency points (Actual: ${rec90Res.categoryTotals.recency})`);
@@ -199,6 +202,7 @@ function runQATestSuite() {
       },
     ],
     referenceDate: refDate,
+    municipalJurisdiction: 'INSIDE_OMAHA',
   };
   const staleRes = calculateOpportunityScore(staleContext);
   assert(staleRes.categoryTotals.recency === 0, `Signal 180 days old yields 0 recency points (Actual: ${staleRes.categoryTotals.recency})`);

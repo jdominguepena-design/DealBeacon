@@ -12,6 +12,12 @@ import {
 import { buildSyntheticOmahaDataset } from './seeds/omaha-synthetic-dataset';
 import { calculateOpportunityScore } from './scoring/engine';
 import { synthesizePropertyTimeline } from './timeline/builder';
+import {
+  isInvestorEligible,
+  INVESTOR_ELIGIBLE_WHERE,
+  filterInvestorEligible,
+  IneligibleJurisdictionError,
+} from './geo/eligibility';
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -125,6 +131,11 @@ export interface PropertyFilterParams {
   hasVacancy?: boolean;
   minEquity?: number;
   sortBy?: 'score_desc' | 'score_asc' | 'recent_desc' | 'value_desc' | 'delinquent_desc';
+  /**
+   * If true, includes properties outside Omaha or unresolved for admin audit.
+   * Defaults to false (strict investor eligibility).
+   */
+  includeIneligible?: boolean;
 }
 
 /**
@@ -135,6 +146,12 @@ export async function getAllProperties(
   currentUserId?: string
 ): Promise<PropertyDTO[]> {
   let list = Array.from(store.properties.values());
+
+  // Fail-closed investor eligibility safeguard:
+  // Exclude non-Omaha / unresolved properties unless explicitly requested for audit
+  if (!filters?.includeIneligible) {
+    list = list.filter((p) => isInvestorEligible(p));
+  }
 
   if (filters) {
     if (filters.query) {
@@ -242,10 +259,16 @@ export async function getAllProperties(
 
 export async function getPropertyById(
   id: string,
-  currentUserId?: string
+  currentUserId?: string,
+  options?: { allowIneligible?: boolean }
 ): Promise<PropertyDTO | null> {
   const property = store.properties.get(id);
   if (!property) return null;
+
+  // Fail-closed detail query guard: exclude non-eligible unless allowIneligible is explicitly passed
+  if (!options?.allowIneligible && !isInvestorEligible(property)) {
+    return null;
+  }
 
   const saveKey = currentUserId ? `${currentUserId}:${id}` : '';
   const saved = saveKey ? store.savedProperties.get(saveKey) : undefined;
@@ -264,6 +287,11 @@ export async function toggleSaveProperty(
   status: LeadStatus = 'NEW',
   priority: PriorityLevel = 'NORMAL'
 ): Promise<{ isSaved: boolean; record?: SavedPropertyDTO }> {
+  const property = store.properties.get(propertyId);
+  if (!property || !isInvestorEligible(property)) {
+    throw new IneligibleJurisdictionError('Cannot save property: not investor-eligible.');
+  }
+
   const key = `${userId}:${propertyId}`;
   const existing = store.savedProperties.get(key);
 
@@ -291,6 +319,11 @@ export async function updateSavedPropertyStatus(
   status: LeadStatus,
   priority?: PriorityLevel
 ): Promise<SavedPropertyDTO | null> {
+  const property = store.properties.get(propertyId);
+  if (!property || !isInvestorEligible(property)) {
+    throw new IneligibleJurisdictionError('Cannot update saved property status: not investor-eligible.');
+  }
+
   const key = `${userId}:${propertyId}`;
   const existing = store.savedProperties.get(key);
 
@@ -321,6 +354,11 @@ export async function addPropertyNote(
   content: string,
   authorName: string = 'Investor'
 ): Promise<PropertyNoteDTO> {
+  const property = store.properties.get(propertyId);
+  if (!property || !isInvestorEligible(property)) {
+    throw new IneligibleJurisdictionError('Cannot add note: property not investor-eligible.');
+  }
+
   const note: PropertyNoteDTO = {
     id: `note-${Date.now()}`,
     userId,
@@ -338,12 +376,22 @@ export async function addPropertyNote(
 export async function recalculatePropertyScores(): Promise<{ updatedCount: number }> {
   let count = 0;
   for (const [id, prop] of store.properties.entries()) {
+    // Fail-closed safeguard: exclude non-Omaha or unverified properties from scoring
+    if (!isInvestorEligible(prop)) {
+      prop.opportunityScore = 0;
+      prop.scoreBreakdownJson = [];
+      prop.lastScoredAt = new Date().toISOString();
+      store.properties.set(id, prop);
+      continue;
+    }
+
     const scoreResult = calculateOpportunityScore({
       ownership: prop.ownershipRecords?.[0] || null,
       taxRecords: prop.taxRecords,
       codeViolations: prop.codeViolations,
       signals: prop.signals,
       referenceDate: new Date(),
+      municipalJurisdiction: prop.municipalJurisdiction,
     });
 
     prop.opportunityScore = scoreResult.totalScore;
@@ -357,7 +405,7 @@ export async function recalculatePropertyScores(): Promise<{ updatedCount: numbe
 }
 
 export async function getDashboardKPIs(userId?: string) {
-  const all = Array.from(store.properties.values());
+  const all = Array.from(store.properties.values()).filter(isInvestorEligible);
   const highPriority = all.filter((p) => p.opportunityScore >= 80);
   const taxDelinquent = all.filter((p) => p.taxRecords?.some((t) => t.isDelinquent));
   const openViolations = all.filter((p) =>
@@ -387,7 +435,7 @@ export async function getSavedPipeline(userId: string) {
     .map((s) => {
       const property = store.properties.get(s.propertyId);
       const notes = store.notes.filter((n) => n.propertyId === s.propertyId);
-      if (!property) return null;
+      if (!property || !isInvestorEligible(property)) return null;
       return {
         ...s,
         property,
@@ -407,3 +455,53 @@ export async function getAdminData() {
     propertiesCount: store.properties.size,
   };
 }
+
+/**
+ * Real Database Queries (Prisma / Neon DEV)
+ *
+ * NOTE: The in-memory methods above operate on the local store for UI prototypes.
+ * The functions below perform authoritative queries directly against PostgreSQL (Neon DEV),
+ * strictly applying investor eligibility predicates.
+ */
+
+/**
+ * Queries authoritative Neon DEV database properties for investor workflows.
+ * Excludes all outside-Omaha, boundary-crossing, and unresolved properties (212 properties).
+ */
+export async function getPrismaInvestorProperties(options: {
+  skip?: number;
+  take?: number;
+  prismaClient?: PrismaClient;
+} = {}) {
+  const client = options.prismaClient ?? prisma;
+  return client.property.findMany({
+    where: INVESTOR_ELIGIBLE_WHERE,
+    include: {
+      ownershipRecords: { where: { isCurrent: true } },
+    },
+    skip: options.skip,
+    take: options.take,
+    orderBy: { parcelId: 'asc' },
+  });
+}
+
+/**
+ * Queries authoritative Neon DEV database properties for audit workflows.
+ * Preserves all 248 records (including 34 outside Omaha and 2 crosses boundary).
+ */
+export async function getPrismaAuditProperties(options: {
+  skip?: number;
+  take?: number;
+  prismaClient?: PrismaClient;
+} = {}) {
+  const client = options.prismaClient ?? prisma;
+  return client.property.findMany({
+    include: {
+      ownershipRecords: { where: { isCurrent: true } },
+    },
+    skip: options.skip,
+    take: options.take,
+    orderBy: { parcelId: 'asc' },
+  });
+}
+
