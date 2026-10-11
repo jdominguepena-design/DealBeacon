@@ -24,9 +24,13 @@
     "test:boundary": "tsx src/lib/geo/__tests__/municipal-boundary.test.ts",
     "test:eligibility": "tsx src/lib/geo/__tests__/eligibility.test.ts",
     "test:repository": "tsx src/lib/repositories/__tests__/property-repository.test.ts",
+    "test:matcher": "tsx src/lib/matching/__tests__/hotline-matcher.test.ts",
+    "test:hotline-review": "tsx src/lib/matching/__tests__/hotline-review-workspace.test.ts",
+    "export:hotline-validation": "tsx scripts/export-hotline-validation-template.ts",
     "test:e2e:properties": "tsx tests/e2e/properties-acceptance.e2e.ts",
     "test:e2e:dashboard": "tsx tests/e2e/dashboard-acceptance.e2e.ts",
-    "test:e2e": "tsx tests/e2e/dashboard-acceptance.e2e.ts && tsx tests/e2e/properties-acceptance.e2e.ts",
+    "test:e2e:hotline-review": "tsx tests/e2e/hotline-review-acceptance.e2e.ts",
+    "test:e2e": "tsx tests/e2e/dashboard-acceptance.e2e.ts && tsx tests/e2e/properties-acceptance.e2e.ts && tsx tests/e2e/hotline-review-acceptance.e2e.ts",
     "import:parcels": "tsx scripts/import-douglas-parcels.ts"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { IngestionRunDTO, SourceRecordDTO, SignalDTO } from '@/types';
 import { SCORING_CONFIG } from '@/lib/scoring/scoring.config';
 import {
@@ -69,14 +70,24 @@ export function AdminConsoleView({
           </p>
         </div>
 
-        <button
-          onClick={handleRecalculate}
-          disabled={recalculating}
-          className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-md disabled:opacity-50"
-        >
-          <RotateCw className={`w-4 h-4 ${recalculating ? 'animate-spin' : ''}`} />
-          <span>{recalculating ? 'Recalculating...' : 'Recalculate All Scores'}</span>
-        </button>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/admin/hotline-review"
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-xs flex items-center gap-2 transition border border-slate-700 shadow-md"
+          >
+            <ShieldAlert className="w-4 h-4 text-amber-400" />
+            <span>Hotline Candidate Review</span>
+          </Link>
+
+          <button
+            onClick={handleRecalculate}
+            disabled={recalculating}
+            className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-md disabled:opacity-50"
+          >
+            <RotateCw className={`w-4 h-4 ${recalculating ? 'animate-spin' : ''}`} />
+            <span>{recalculating ? 'Recalculating...' : 'Recalculate All Scores'}</span>
+          </button>
+        </div>
       </div>
 
       {recalcSuccess && (
