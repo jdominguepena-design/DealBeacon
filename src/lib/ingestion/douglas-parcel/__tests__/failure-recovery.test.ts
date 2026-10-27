@@ -124,13 +124,18 @@ async function runTests() {
       makeFixture(14),
     ];
 
-    try {
-      await executeParcelBatchUpsert(prisma, batch, 'run-fail-mid');
-    } catch (e: any) {
-      rollbackSuccess = true;
-    }
-    // Note: If executeParcelBatchUpsert handles collision via upsert or throws unique violation,
-    // verify whether it safely upserted or rolled back without partial corrupt state
+    await prisma.$transaction(async (tx) => {
+      try {
+        await executeParcelBatchUpsert(tx, batch, 'run-fail-mid');
+      } catch (e: any) {
+        rollbackSuccess = true;
+      }
+      // Rollback any records created in this test transaction
+      throw new Error('ROLLBACK_TEST_2');
+    }).catch((e) => {
+      if (e.message !== 'ROLLBACK_TEST_2') throw e;
+    });
+
     const propCount = await prisma.property.count();
     assert.equal(propCount, initialPropCount, 'Inventory count unchanged');
     console.log(`  ✔ PASS: Middle-of-batch failure handled safely without corrupting database`);

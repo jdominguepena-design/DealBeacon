@@ -303,8 +303,16 @@ export function evaluateHotlineCandidate(
     let distanceToPolyMeters: number | null = null;
     if (pointFeature) {
       // Calculate exact distance from point to polygon boundary in meters (preserve true numeric distance)
-      const distanceKm = turf.pointToLineDistance(pointFeature, turf.polygonToLine(addressMatch.polygon) as any, { units: 'kilometers' });
-      distanceToPolyMeters = distanceKm * 1000;
+      const converted = turf.polygonToLine(addressMatch.polygon);
+      const lines = turf.flatten(converted as any);
+      let minDistanceKm = Infinity;
+      for (const lineFeature of lines.features) {
+        const d = turf.pointToLineDistance(pointFeature, lineFeature as any, { units: 'kilometers' });
+        if (d < minDistanceKm) {
+          minDistanceKm = d;
+        }
+      }
+      distanceToPolyMeters = minDistanceKm !== Infinity ? minDistanceKm * 1000 : null;
     }
 
     const isDistant = distanceToPolyMeters !== null && distanceToPolyMeters > 20;

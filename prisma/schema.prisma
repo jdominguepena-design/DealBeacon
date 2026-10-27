@@ -57,6 +57,18 @@ enum MunicipalJurisdiction {
   UNRESOLVED
 }
 
+enum TaxLienObservationState {
+  PRESENT_IN_CURRENT_SNAPSHOT
+  ABSENT_FROM_LATEST_SNAPSHOT
+  OFFICIALLY_CONFIRMED_RELEASED_OR_REDEEMED
+}
+
+enum TaxLienMatchState {
+  MATCHED_TO_CANONICAL_PROPERTY
+  UNMATCHED_COUNTY_PIN
+  QUARANTINED_MALFORMED
+}
+
 model User {
   id              String          @id @default(cuid())
   email           String          @unique
@@ -83,7 +95,7 @@ model Property {
   bedrooms            Int?
   bathrooms           Float?
   squareFeet          Int?
-  lotSizeSqFt         Int?
+  lotSizeSqFt         BigInt?
   assessedValue       Float?
   estimatedValue      Float?
   estimatedEquityPct  Float?          // e.g. 0.85 = 85% equity
@@ -122,6 +134,7 @@ model Property {
   notes               PropertyNote[]
   scoreHistory        ScoreHistory[]
   hotlineReports      HotlineReport[]
+  taxLienRecords      TaxLienRecord[]
 
   @@index([opportunityScore])
   @@index([neighborhood])
@@ -179,21 +192,70 @@ model TaxRecord {
 }
 
 model CodeViolation {
-  id              String         @id @default(cuid())
-  propertyId      String
-  property        Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  caseNumber      String         // e.g. "CE-2025-0819"
-  violationDate   DateTime
-  violationType   String         // EXTERIOR_MAINTENANCE, STRUCTURAL, TRASH_DEBRIS, TALL_WEEDS, VACANT_UNSECURED
-  severity        SignalSeverity @default(MEDIUM)
-  status          String         // OPEN, NOTICE_ISSUED, PENDING_HEARING, CONDEMNED, RESOLVED
-  description     String
-  inspectorNotes  String?
-  complianceDate  DateTime?
-  createdAt       DateTime       @default(now())
+  id                         String         @id @default(cuid())
+  sourceName                 String         @default("OMAHA_ACCELA_CODE_ENFORCEMENT")
+  sourceObjectId             Int?           // ESRI objectid
+  sourceGlobalId             String?        // ESRI globalid
+  caseNumber                 String         @unique // permitnum e.g. "CASE-15-00154" or "CIT-23-00007"
+  sourcePin                  String         @default("") // 10-digit PIN from Accela (e.g. "2438320000")
+  
+  // Property Association (Nullable for strict exact match & unmatched quarantine)
+  propertyId                 String?
+  property                   Property?      @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  matchStatus                String         @default("UNMATCHED") // "MATCHED_EXACT_PIN" | "UNMATCHED_COUNTY_PIN"
+  
+  // Case Classification
+  caseType                   String         @default("Housing Inspection Case") // "Housing Inspection Case" | "Citation Record"
+  caseRecordClassMapped      String?        // "Code Case" | "Citation Record"
+  
+  // Verbatim Upstream Statuses & Categorized Stage
+  statusCurrent              String         @default("Unknown") // "In Violation", "Closed", "Inspection Scheduled", etc.
+  statusCurrentMapped        String         @default("Unknown") // "Active Violation", "Closed", "Citation Issued", etc.
+  enforcementStage           String         @default("UNKNOWN_STAGE") // "ACTIVE_CONFIRMED_VIOLATION" | "ACTIVE_LEGAL_CITATION" | "INSPECTION_PENDING" | "CLOSED_COMPLIED" | "CLOSED_UNFOUNDED" | "CLOSED_HISTORICAL"
+  
+  // Backward compatibility fields for legacy synthetic DTO consumers
+  violationType              String         @default("HOUSING_CODE_INSPECTION")
+  severity                   SignalSeverity @default(MEDIUM)
+  status                     String         @default("OPEN")
+  description                String         @default("")
+  inspectorNotes             String?
+  violationDate              DateTime?      // effective opened or initial inspection date
+  
+  // Critical Investor Distress Flags
+  isVacant                   Boolean        @default(false) // vacant === 'Yes'
+  vacateReason               String?        // e.g. "Non-Compliance"
+  hasDemoOrder               Boolean        @default(false) // demo_order === 'Yes'
+  demoIssuedDate             DateTime?
+  
+  // Key Inspection & Compliance Timestamps
+  openedDate                 DateTime?      // first_process_date or initial_inspection
+  initialInspectionDate      DateTime?      // initial_inspection
+  lastReInspectionDate       DateTime?      // last_re_inspection
+  complianceDeadline         DateTime?      // first_compliance_deadline or extended_compliance_deadline
+  complianceDate             DateTime?      // compliance_date
+  lastUpdatedSource          DateTime?      // lastupdated (epoch ms from ESRI)
+  
+  // Situs Address Recorded at Inspection
+  originalAddress            String?
+  originalCity               String?
+  originalState              String?
+  originalZip                String?
+  
+  // Source Provenance & Official Portal Link
+  accelaUrl                  String?        // direct link to Omaha Permits Citizen Access portal
+  latestSourceRecordId       String?
+  latestSourceRecord         SourceRecord?  @relation(fields: [latestSourceRecordId], references: [id], onDelete: SetNull)
+  
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
 
   @@index([propertyId])
-  @@index([status])
+  @@index([sourcePin])
+  @@index([statusCurrentMapped])
+  @@index([enforcementStage])
+  @@index([matchStatus])
+  @@index([isVacant])
+  @@index([hasDemoOrder])
   @@map("code_violations")
 }
 
@@ -250,6 +312,8 @@ model SourceRecord {
   signals         Signal[]
   events          PropertyEvent[]
   hotlineReports  HotlineReport[]
+  taxLienRecords  TaxLienRecord[]
+  codeViolations  CodeViolation[]
 
   @@unique([sourceName, sourceRecordId])
   @@index([propertyId])
@@ -358,3 +422,35 @@ model HotlineReport {
   @@index([matchStatus])
   @@map("hotline_reports")
 }
+
+model TaxLienRecord {
+  id                   String                  @id @default(cuid())
+  sourceName           String                  @default("DOUGLAS_COUNTY_TAX_LIEN")
+  sourceObjectId       Int
+  sourcePin            String
+  taxYear              String?
+  amountCents          Int
+  amountFormatted      String
+  situsAddress         String?
+  countyClass          String?
+  addition             String?
+  propertyId           String?
+  property             Property?               @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  matchStatus          TaxLienMatchState       @default(UNMATCHED_COUNTY_PIN)
+  observationStatus    TaxLienObservationState @default(PRESENT_IN_CURRENT_SNAPSHOT)
+  firstObservedAt      DateTime                @default(now())
+  lastObservedAt       DateTime                @default(now())
+  latestSourceRecordId String?
+  latestSourceRecord   SourceRecord?           @relation(fields: [latestSourceRecordId], references: [id], onDelete: SetNull)
+  contentSha256        String
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  @@unique([sourceName, sourceObjectId])
+  @@index([sourcePin])
+  @@index([propertyId])
+  @@index([matchStatus])
+  @@index([observationStatus])
+  @@map("tax_lien_records")
+}
+

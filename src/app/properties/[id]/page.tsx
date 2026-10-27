@@ -21,6 +21,9 @@ import {
   Database,
   CheckCircle2,
 } from 'lucide-react';
+import { HotlineReportsCard } from '@/components/detail/HotlineReportsCard';
+import { TaxLiensCard } from '@/components/detail/TaxLiensCard';
+import { CodeViolationsCard } from '@/components/detail/CodeViolationsCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -297,6 +300,13 @@ export default async function PropertyDetailPage({ params }: PropertyDetailPageP
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Public Records Intelligence: Code Violations, Hotline Reports & Delinquent Tax Liens */}
+      <div className="space-y-6">
+        <CodeViolationsCard violations={property.codeViolations} />
+        <HotlineReportsCard hotlineReports={property.hotlineReports} />
+        <TaxLiensCard taxLiens={property.taxLiens} />
       </div>
 
       {/* Data Provenance & Methodology Notice */}

@@ -4,6 +4,15 @@ if (typeof window !== 'undefined') {
 import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../db';
 import { INVESTOR_ELIGIBLE_WHERE } from '../geo/eligibility';
+import {
+  DISPUTED_HOTLINE_REQUEST_IDS,
+  HotlineInvestorRelevance,
+  classifyHotlineInvestorRelevance,
+  buildConditionComplaintPrismaWhere,
+} from '../relevance-policy';
+import { CodeViolationDTO } from '@/types';
+
+export { DISPUTED_HOTLINE_REQUEST_IDS, type HotlineInvestorRelevance };
 
 /**
  * Filter parameters for querying eligible Omaha properties.
@@ -20,6 +29,8 @@ export interface EligiblePropertyFilterParams {
   corporateStatus?: 'PROBABLE_CORPORATE_NAME' | 'INDIVIDUAL';
   absenteeStatus?: 'ABSENTEE' | 'OWNER_OCCUPIED' | 'UNKNOWN';
   hasAuthoritativeAddress?: boolean; // Filter by whether parcel has assigned street situs
+  hasTaxSaleRecord?: boolean;        // Filter properties with linked tax sale snapshot record
+  hasPropertyConditionComplaint?: boolean; // Filter properties with potential condition complaint
 }
 
 /**
@@ -122,6 +133,8 @@ export interface RealPropertySummaryDTO {
   municipalJurisdiction: 'INSIDE_OMAHA';
   assessorUrl: string | null;
   treasurerUrl: string | null;
+  hasTaxSaleRecord: boolean;
+  hasPropertyConditionComplaint: boolean;
   owner: {
     ownerName: string | null;
     ownerClassification: DisplayOwnerClassification;
@@ -137,6 +150,43 @@ export interface RealPropertySummaryDTO {
     sourceRecordId: string;
     ingestedAt: string;
   } | null;
+}
+
+export interface PropertyHotlineReportDTO {
+  id: string;
+  requestId: string | null;
+  reportCategory: string | null;
+  problemType: string | null;
+  locationText: string | null;
+  status: string | null;
+  recordKind: string;
+  reportedAt: string | null;
+  completedAt: string | null;
+  sourceUrl: string | null;
+  sourceObjectId: number | null;
+  matchStatus: string;
+  matchConfidence: string | null;
+  matchMethod: string | null;
+  locationAssociation: string;
+  investorRelevance: HotlineInvestorRelevance;
+  investorRationale: string | null;
+  isDisputed: boolean;
+  disputeNotes: string | null;
+  disputeReason: string | null;
+}
+
+export interface PropertyTaxLienDTO {
+  id: string;
+  sourceName: string;
+  sourceObjectId: number;
+  sourcePin: string;
+  taxYear: string | null;
+  amountCents: number;
+  amountFormatted: string;
+  observationStatus: string;
+  matchStatus: string;
+  firstObservedAt: string;
+  lastObservedAt: string;
 }
 
 /**
@@ -169,6 +219,9 @@ export interface RealPropertyDetailDTO extends RealPropertySummaryDTO {
     matchedStatus: string;
     ingestedAt: string;
   } | null;
+  hotlineReports: PropertyHotlineReportDTO[];
+  taxLiens: PropertyTaxLienDTO[];
+  codeViolations: CodeViolationDTO[];
 }
 
 /**
@@ -274,6 +327,33 @@ function buildPrismaWhere(filters?: EligiblePropertyFilterParams): Prisma.Proper
     };
   }
 
+  // Public record filter: Tax-Sale Snapshot Record
+  if (filters.hasTaxSaleRecord === true) {
+    where.taxLienRecords = {
+      some: {
+        matchStatus: 'MATCHED_TO_CANONICAL_PROPERTY',
+      },
+    };
+  } else if (filters.hasTaxSaleRecord === false) {
+    where.taxLienRecords = {
+      none: {
+        matchStatus: 'MATCHED_TO_CANONICAL_PROPERTY',
+      },
+    };
+  }
+
+  // Public record filter: Potential Property-Condition Complaint
+  // Excludes disputed IDs, context-only, civic/infrastructure, and unknown
+  if (filters.hasPropertyConditionComplaint === true) {
+    where.hotlineReports = {
+      some: buildConditionComplaintPrismaWhere(),
+    };
+  } else if (filters.hasPropertyConditionComplaint === false) {
+    where.hotlineReports = {
+      none: buildConditionComplaintPrismaWhere(),
+    };
+  }
+
   return where;
 }
 
@@ -303,6 +383,22 @@ function mapToSummaryDTO(record: any): RealPropertySummaryDTO {
     primaryOwner?.corporateStatus
   );
 
+  const hasTaxSaleRecord = Boolean(
+    record.taxLienRecords &&
+    record.taxLienRecords.length > 0 &&
+    record.taxLienRecords.some(
+      (t: any) => t.matchStatus === 'MATCHED_TO_CANONICAL_PROPERTY'
+    )
+  );
+
+  const hasPropertyConditionComplaint = Boolean(
+    record.hotlineReports &&
+    record.hotlineReports.length > 0 &&
+    record.hotlineReports.some(
+      (r: any) => classifyHotlineInvestorRelevance(r) === 'POTENTIAL_PROPERTY_CONDITION'
+    )
+  );
+
   return {
     id: record.id,
     parcelId: record.parcelId, // Strict preservation of leading zeros
@@ -315,7 +411,12 @@ function mapToSummaryDTO(record: any): RealPropertySummaryDTO {
     countyClass: record.countyClass ?? null,
     yearBuilt: record.yearBuilt ?? null,
     squareFeet: record.squareFeet ?? null,
-    lotSizeSqFt: record.lotSizeSqFt ?? null,
+    lotSizeSqFt:
+      record.lotSizeSqFt !== null && record.lotSizeSqFt !== undefined
+        ? Number.isSafeInteger(Number(record.lotSizeSqFt))
+          ? Number(record.lotSizeSqFt)
+          : null
+        : null,
     condition: record.condition ?? null,
     quality: record.quality ?? null,
     latitude: record.latitude ?? null,
@@ -323,6 +424,8 @@ function mapToSummaryDTO(record: any): RealPropertySummaryDTO {
     municipalJurisdiction: 'INSIDE_OMAHA',
     assessorUrl: record.assessorUrl ?? null,
     treasurerUrl: record.treasurerUrl ?? null,
+    hasTaxSaleRecord,
+    hasPropertyConditionComplaint,
     owner: primaryOwner
       ? {
           ownerName: primaryOwner.ownerName ?? null,
@@ -399,6 +502,24 @@ export async function listEligibleProperties(
         municipalJurisdiction: true,
         assessorUrl: true,
         treasurerUrl: true,
+        taxLienRecords: {
+          where: { matchStatus: 'MATCHED_TO_CANONICAL_PROPERTY' },
+          take: 1,
+          select: {
+            matchStatus: true,
+          },
+        },
+        hotlineReports: {
+          where: buildConditionComplaintPrismaWhere(),
+          take: 1,
+          select: {
+            id: true,
+            requestId: true,
+            reportCategory: true,
+            problemType: true,
+            matchAuditJson: true,
+          },
+        },
         ownershipRecords: {
           take: 1,
           select: {
@@ -438,6 +559,135 @@ export async function listEligibleProperties(
     properties: records.map(mapToSummaryDTO),
     meta,
   };
+}
+
+/**
+ * Maps database HotlineReport records into safe, read-only DTOs.
+ * Preserves source complaint details, timestamps, and classifications.
+ * Disputed associations are explicitly flagged and decoupled from condition signals.
+ */
+export function mapHotlineReports(records?: any[] | null): PropertyHotlineReportDTO[] {
+  if (!records || records.length === 0) return [];
+  return records.map((r) => {
+    const isDisputed = Boolean(r.requestId && DISPUTED_HOTLINE_REQUEST_IDS.has(r.requestId));
+    const audit = (r.matchAuditJson as Record<string, any>) || {};
+    const investorRelevance = classifyHotlineInvestorRelevance(r);
+
+    const locationAssociation = isDisputed
+      ? 'AMBIGUOUS_LOCATION'
+      : (audit.locationAssociation || (r.matchStatus === 'CONFIRMED' ? 'CONFIRMED_LOCATION_ASSOCIATION' : 'UNMATCHED_LOCATION'));
+
+    const disputeNotes = isDisputed
+      ? 'Disputed Location Association: Citizen reported off-site City Park / Community Center issue with residential address. Parcel relationship is under review and excluded from investor condition signals.'
+      : null;
+
+    return {
+      id: r.id,
+      requestId: r.requestId ?? null,
+      reportCategory: r.reportCategory ?? null,
+      problemType: r.problemType ?? null,
+      locationText: r.locationText ?? null,
+      status: r.status ?? null,
+      recordKind: r.recordKind ?? 'UNVERIFIED_COMPLAINT',
+      reportedAt: r.reportedAt ? (typeof r.reportedAt === 'string' ? r.reportedAt : r.reportedAt.toISOString()) : null,
+      completedAt: r.completedAt ? (typeof r.completedAt === 'string' ? r.completedAt : r.completedAt.toISOString()) : null,
+      sourceUrl: r.sourceUrl ?? null,
+      sourceObjectId: r.sourceObjectId ?? null,
+      matchStatus: r.matchStatus,
+      matchConfidence: r.matchConfidence ?? null,
+      matchMethod: r.matchMethod ?? null,
+      locationAssociation,
+      investorRelevance,
+      investorRationale: isDisputed
+        ? 'Suppressed from investor condition summaries: Off-site civic facility reported using residential home address.'
+        : audit.rationale || audit.investorRationale || null,
+      isDisputed,
+      disputeNotes,
+      disputeReason: disputeNotes,
+    };
+  });
+}
+
+/**
+ * Maps database TaxLienRecord records into safe, read-only DTOs.
+ */
+export function mapTaxLiens(records?: any[] | null): PropertyTaxLienDTO[] {
+  if (!records || records.length === 0) return [];
+  return records.map((t) => ({
+    id: t.id,
+    sourceName: t.sourceName,
+    sourceObjectId: t.sourceObjectId,
+    sourcePin: t.sourcePin,
+    taxYear: t.taxYear ?? null,
+    amountCents: t.amountCents,
+    amountFormatted: t.amountFormatted,
+    observationStatus: t.observationStatus,
+    matchStatus: t.matchStatus,
+    firstObservedAt: typeof t.firstObservedAt === 'string' ? t.firstObservedAt : t.firstObservedAt.toISOString(),
+    lastObservedAt: typeof t.lastObservedAt === 'string' ? t.lastObservedAt : t.lastObservedAt.toISOString(),
+  }));
+}
+
+/**
+ * Maps database CodeViolation records into safe, read-only DTOs.
+ */
+export function mapCodeViolations(records?: any[] | null): CodeViolationDTO[] {
+  if (!records || records.length === 0) return [];
+  return records.map((v) => ({
+    id: v.id,
+    propertyId: v.propertyId ?? null,
+    caseNumber: v.caseNumber,
+    violationDate: v.violationDate
+      ? (typeof v.violationDate === 'string' ? v.violationDate : v.violationDate.toISOString())
+      : (v.openedDate
+        ? (typeof v.openedDate === 'string' ? v.openedDate : v.openedDate.toISOString())
+        : (typeof v.createdAt === 'string' ? v.createdAt : v.createdAt.toISOString())),
+    violationType: v.violationType || v.caseType || 'HOUSING_CODE_INSPECTION',
+    severity: v.severity ?? 'MEDIUM',
+    status: v.statusCurrentMapped || v.status || 'OPEN',
+    description: v.description || v.statusCurrent || '',
+    inspectorNotes: v.inspectorNotes ?? null,
+    complianceDate: v.complianceDate
+      ? (typeof v.complianceDate === 'string' ? v.complianceDate : v.complianceDate.toISOString())
+      : null,
+    createdAt: typeof v.createdAt === 'string' ? v.createdAt : v.createdAt.toISOString(),
+    sourceName: v.sourceName,
+    sourceObjectId: v.sourceObjectId ?? null,
+    sourceGlobalId: v.sourceGlobalId ?? null,
+    sourcePin: v.sourcePin,
+    matchStatus: v.matchStatus,
+    caseType: v.caseType,
+    caseRecordClassMapped: v.caseRecordClassMapped ?? null,
+    statusCurrent: v.statusCurrent,
+    statusCurrentMapped: v.statusCurrentMapped,
+    enforcementStage: v.enforcementStage,
+    isVacant: v.isVacant ?? false,
+    vacateReason: v.vacateReason ?? null,
+    hasDemoOrder: v.hasDemoOrder ?? false,
+    demoIssuedDate: v.demoIssuedDate
+      ? (typeof v.demoIssuedDate === 'string' ? v.demoIssuedDate : v.demoIssuedDate.toISOString())
+      : null,
+    openedDate: v.openedDate
+      ? (typeof v.openedDate === 'string' ? v.openedDate : v.openedDate.toISOString())
+      : null,
+    initialInspectionDate: v.initialInspectionDate
+      ? (typeof v.initialInspectionDate === 'string' ? v.initialInspectionDate : v.initialInspectionDate.toISOString())
+      : null,
+    lastReInspectionDate: v.lastReInspectionDate
+      ? (typeof v.lastReInspectionDate === 'string' ? v.lastReInspectionDate : v.lastReInspectionDate.toISOString())
+      : null,
+    complianceDeadline: v.complianceDeadline
+      ? (typeof v.complianceDeadline === 'string' ? v.complianceDeadline : v.complianceDeadline.toISOString())
+      : null,
+    lastUpdatedSource: v.lastUpdatedSource
+      ? (typeof v.lastUpdatedSource === 'string' ? v.lastUpdatedSource : v.lastUpdatedSource.toISOString())
+      : null,
+    originalAddress: v.originalAddress ?? null,
+    originalCity: v.originalCity ?? null,
+    originalState: v.originalState ?? null,
+    originalZip: v.originalZip ?? null,
+    accelaUrl: v.accelaUrl ?? null,
+  }));
 }
 
 /**
@@ -502,6 +752,82 @@ export async function getEligiblePropertyById(
           ingestedAt: true,
         },
       },
+      hotlineReports: {
+        select: {
+          id: true,
+          requestId: true,
+          reportCategory: true,
+          problemType: true,
+          locationText: true,
+          status: true,
+          recordKind: true,
+          reportedAt: true,
+          completedAt: true,
+          sourceUrl: true,
+          sourceObjectId: true,
+          matchStatus: true,
+          matchMethod: true,
+          matchConfidence: true,
+          matchAuditJson: true,
+        },
+        orderBy: { reportedAt: 'desc' },
+      },
+      taxLienRecords: {
+        select: {
+          id: true,
+          sourceName: true,
+          sourceObjectId: true,
+          sourcePin: true,
+          taxYear: true,
+          amountCents: true,
+          amountFormatted: true,
+          observationStatus: true,
+          matchStatus: true,
+          firstObservedAt: true,
+          lastObservedAt: true,
+        },
+        orderBy: { taxYear: 'desc' },
+      },
+      codeViolations: {
+        select: {
+          id: true,
+          propertyId: true,
+          caseNumber: true,
+          sourcePin: true,
+          matchStatus: true,
+          caseType: true,
+          caseRecordClassMapped: true,
+          statusCurrent: true,
+          statusCurrentMapped: true,
+          enforcementStage: true,
+          violationType: true,
+          severity: true,
+          status: true,
+          description: true,
+          inspectorNotes: true,
+          violationDate: true,
+          isVacant: true,
+          vacateReason: true,
+          hasDemoOrder: true,
+          demoIssuedDate: true,
+          openedDate: true,
+          initialInspectionDate: true,
+          lastReInspectionDate: true,
+          complianceDeadline: true,
+          complianceDate: true,
+          lastUpdatedSource: true,
+          originalAddress: true,
+          originalCity: true,
+          originalState: true,
+          originalZip: true,
+          accelaUrl: true,
+          sourceName: true,
+          sourceObjectId: true,
+          sourceGlobalId: true,
+          createdAt: true,
+        },
+        orderBy: [{ openedDate: 'desc' }, { createdAt: 'desc' }],
+      },
     },
   });
 
@@ -560,6 +886,9 @@ export async function getEligiblePropertyById(
           ingestedAt: primarySource.ingestedAt.toISOString(),
         }
       : null,
+    hotlineReports: mapHotlineReports(record.hotlineReports),
+    taxLiens: mapTaxLiens(record.taxLienRecords),
+    codeViolations: mapCodeViolations(record.codeViolations),
   };
 }
 
@@ -628,6 +957,82 @@ export async function getEligiblePropertyByPin(
           ingestedAt: true,
         },
       },
+      hotlineReports: {
+        select: {
+          id: true,
+          requestId: true,
+          reportCategory: true,
+          problemType: true,
+          locationText: true,
+          status: true,
+          recordKind: true,
+          reportedAt: true,
+          completedAt: true,
+          sourceUrl: true,
+          sourceObjectId: true,
+          matchStatus: true,
+          matchMethod: true,
+          matchConfidence: true,
+          matchAuditJson: true,
+        },
+        orderBy: { reportedAt: 'desc' },
+      },
+      taxLienRecords: {
+        select: {
+          id: true,
+          sourceName: true,
+          sourceObjectId: true,
+          sourcePin: true,
+          taxYear: true,
+          amountCents: true,
+          amountFormatted: true,
+          observationStatus: true,
+          matchStatus: true,
+          firstObservedAt: true,
+          lastObservedAt: true,
+        },
+        orderBy: { taxYear: 'desc' },
+      },
+      codeViolations: {
+        select: {
+          id: true,
+          propertyId: true,
+          caseNumber: true,
+          sourcePin: true,
+          matchStatus: true,
+          caseType: true,
+          caseRecordClassMapped: true,
+          statusCurrent: true,
+          statusCurrentMapped: true,
+          enforcementStage: true,
+          violationType: true,
+          severity: true,
+          status: true,
+          description: true,
+          inspectorNotes: true,
+          violationDate: true,
+          isVacant: true,
+          vacateReason: true,
+          hasDemoOrder: true,
+          demoIssuedDate: true,
+          openedDate: true,
+          initialInspectionDate: true,
+          lastReInspectionDate: true,
+          complianceDeadline: true,
+          complianceDate: true,
+          lastUpdatedSource: true,
+          originalAddress: true,
+          originalCity: true,
+          originalState: true,
+          originalZip: true,
+          accelaUrl: true,
+          sourceName: true,
+          sourceObjectId: true,
+          sourceGlobalId: true,
+          createdAt: true,
+        },
+        orderBy: [{ openedDate: 'desc' }, { createdAt: 'desc' }],
+      },
     },
   });
 
@@ -686,6 +1091,9 @@ export async function getEligiblePropertyByPin(
           ingestedAt: primarySource.ingestedAt.toISOString(),
         }
       : null,
+    hotlineReports: mapHotlineReports(record.hotlineReports),
+    taxLiens: mapTaxLiens(record.taxLienRecords),
+    codeViolations: mapCodeViolations(record.codeViolations),
   };
 }
 

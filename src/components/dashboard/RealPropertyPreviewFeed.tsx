@@ -55,6 +55,25 @@ export function RealPropertyPreviewFeed({ properties }: RealPropertyPreviewFeedP
                   <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                     {prop.propertyType.replace('_', ' ')}
                   </span>
+
+                  {prop.hasTaxSaleRecord && (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-300 bg-amber-950/70 border border-amber-800/80 px-1.5 py-0.5 rounded"
+                      title="Douglas County tax-sale snapshot record on file. Does not indicate active foreclosure or current delinquency."
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                      Tax-Sale Snapshot
+                    </span>
+                  )}
+                  {prop.hasPropertyConditionComplaint && (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-sky-300 bg-sky-950/70 border border-sky-800/80 px-1.5 py-0.5 rounded"
+                      title="Omaha 311 citizen report concerning property condition. Unverified complaint, not a citation."
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
+                      311 Condition Complaint
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">

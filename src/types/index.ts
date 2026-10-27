@@ -75,9 +75,18 @@ export interface TaxRecordDTO {
   createdAt: string;
 }
 
+export type EnforcementStage =
+  | 'ACTIVE_CONFIRMED_VIOLATION'
+  | 'ACTIVE_LEGAL_CITATION'
+  | 'INSPECTION_PENDING'
+  | 'CLOSED_COMPLIED'
+  | 'CLOSED_UNFOUNDED'
+  | 'CLOSED_HISTORICAL'
+  | 'UNKNOWN_STAGE';
+
 export interface CodeViolationDTO {
   id: string;
-  propertyId: string;
+  propertyId: string | null;
   caseNumber: string;
   violationDate: string;
   violationType: string;
@@ -87,6 +96,32 @@ export interface CodeViolationDTO {
   inspectorNotes: string | null;
   complianceDate: string | null;
   createdAt: string;
+
+  // Accela Planning Layer 2 official public fields
+  sourceName?: string;
+  sourceObjectId?: number | null;
+  sourceGlobalId?: string | null;
+  sourcePin?: string;
+  matchStatus?: string;
+  caseType?: string;
+  caseRecordClassMapped?: string | null;
+  statusCurrent?: string;
+  statusCurrentMapped?: string;
+  enforcementStage?: EnforcementStage | string;
+  isVacant?: boolean;
+  vacateReason?: string | null;
+  hasDemoOrder?: boolean;
+  demoIssuedDate?: string | null;
+  openedDate?: string | null;
+  initialInspectionDate?: string | null;
+  lastReInspectionDate?: string | null;
+  complianceDeadline?: string | null;
+  lastUpdatedSource?: string | null;
+  originalAddress?: string | null;
+  originalCity?: string | null;
+  originalState?: string | null;
+  originalZip?: string | null;
+  accelaUrl?: string | null;
 }
 
 export interface SignalDTO {

@@ -22,6 +22,8 @@ interface PropertiesPageProps {
     corporateStatus?: string;
     absenteeStatus?: string;
     hasAuthoritativeAddress?: string;
+    hasTaxSaleRecord?: string;
+    hasPropertyConditionComplaint?: string;
   }>;
 }
 
@@ -75,6 +77,18 @@ export default async function PropertiesPage({ searchParams }: PropertiesPagePro
     repositoryFilters.absenteeStatus = params.absenteeStatus;
   }
 
+  if (params.hasTaxSaleRecord === 'true') {
+    repositoryFilters.hasTaxSaleRecord = true;
+  } else if (params.hasTaxSaleRecord === 'false') {
+    repositoryFilters.hasTaxSaleRecord = false;
+  }
+
+  if (params.hasPropertyConditionComplaint === 'true') {
+    repositoryFilters.hasPropertyConditionComplaint = true;
+  } else if (params.hasPropertyConditionComplaint === 'false') {
+    repositoryFilters.hasPropertyConditionComplaint = false;
+  }
+
   let propertiesResult: { properties: any[]; meta: PaginationMeta } | null = null;
   let fetchError: string | null = null;
 
@@ -99,6 +113,8 @@ export default async function PropertiesPage({ searchParams }: PropertiesPagePro
     if (params.maxYearBuilt) search.set('maxYearBuilt', params.maxYearBuilt);
     if (params.corporateStatus) search.set('corporateStatus', params.corporateStatus);
     if (params.absenteeStatus) search.set('absenteeStatus', params.absenteeStatus);
+    if (params.hasTaxSaleRecord) search.set('hasTaxSaleRecord', params.hasTaxSaleRecord);
+    if (params.hasPropertyConditionComplaint) search.set('hasPropertyConditionComplaint', params.hasPropertyConditionComplaint);
     search.set('page', targetPage.toString());
     return `/properties?${search.toString()}`;
   };

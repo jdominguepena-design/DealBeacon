@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Filter, RotateCcw, Search, Building2, UserCheck } from 'lucide-react';
+import { Filter, RotateCcw, Search, Building2, UserCheck, Landmark, FileQuestion } from 'lucide-react';
 
 interface PropertyFiltersProps {
   currentFilters: {
@@ -14,6 +14,8 @@ interface PropertyFiltersProps {
     corporateStatus?: string;
     absenteeStatus?: string;
     hasAuthoritativeAddress?: string;
+    hasTaxSaleRecord?: string;
+    hasPropertyConditionComplaint?: string;
   };
 }
 
@@ -158,6 +160,95 @@ export function PropertyFilters({ currentFilters }: PropertyFiltersProps) {
             onChange={(e) => updateParam('maxYearBuilt', e.target.value.trim() ? e.target.value : null)}
             className="w-16 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-500"
           />
+        </div>
+      </div>
+
+      {/* Public Record Signal Filters (Tax Sale & 311 Condition Complaints) */}
+      <div className="pt-3 border-t border-slate-800/80 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-slate-400 mr-1 flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5" />
+              <span>Public-Record Signals:</span>
+            </span>
+
+            {/* Filter A: Tax-Sale Snapshot */}
+            <button
+              onClick={() =>
+                updateParam(
+                  'hasTaxSaleRecord',
+                  currentFilters.hasTaxSaleRecord === 'true' ? null : 'true'
+                )
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold border transition ${
+                currentFilters.hasTaxSaleRecord === 'true'
+                  ? 'bg-amber-950 text-amber-300 border-amber-600 shadow-sm shadow-amber-950/40'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-300'
+              }`}
+            >
+              <Landmark className="w-3.5 h-3.5 text-amber-400" />
+              <span>
+                {currentFilters.hasTaxSaleRecord === 'true' ? '✓ ' : '+ '}
+                Tax-Sale Snapshot
+              </span>
+            </button>
+
+            {/* Filter B: 311 Property-Condition Complaint */}
+            <button
+              onClick={() =>
+                updateParam(
+                  'hasPropertyConditionComplaint',
+                  currentFilters.hasPropertyConditionComplaint === 'true' ? null : 'true'
+                )
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold border transition ${
+                currentFilters.hasPropertyConditionComplaint === 'true'
+                  ? 'bg-amber-950 text-amber-300 border-amber-600 shadow-sm shadow-amber-950/40'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-300'
+              }`}
+            >
+              <FileQuestion className="w-3.5 h-3.5 text-amber-400" />
+              <span>
+                {currentFilters.hasPropertyConditionComplaint === 'true' ? '✓ ' : '+ '}
+                311 Property-Condition Complaint
+              </span>
+            </button>
+          </div>
+
+          {/* Active Filter Clear Helper */}
+          {(currentFilters.hasTaxSaleRecord === 'true' ||
+            currentFilters.hasPropertyConditionComplaint === 'true') && (
+            <div className="flex items-center gap-2 text-[11px] text-amber-400">
+              <span className="font-semibold">
+                {currentFilters.hasTaxSaleRecord === 'true' &&
+                currentFilters.hasPropertyConditionComplaint === 'true'
+                  ? 'AND Logic: Matches both signals'
+                  : 'Single signal filter active'}
+              </span>
+              <button
+                onClick={() => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.delete('hasTaxSaleRecord');
+                  params.delete('hasPropertyConditionComplaint');
+                  params.delete('page');
+                  router.push(`/properties?${params.toString()}`);
+                }}
+                className="text-slate-400 hover:text-white underline transition"
+              >
+                Clear signals
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Short Explanatory Notices */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-500 pt-1">
+          <div>
+            <strong className="text-slate-400">Tax-Sale Snapshot:</strong> Sourced from Douglas County Treasurer annual tax-sale roll. Does not prove current unpaid balance or active foreclosure.
+          </div>
+          <div>
+            <strong className="text-slate-400">311 Condition Complaint:</strong> Omaha citizen request classified as potential physical condition (litter, weeds, exterior). Does not prove official housing violation or owner responsibility. Context-only (animal control) and disputed civic reports are strictly excluded.
+          </div>
         </div>
       </div>
     </div>
