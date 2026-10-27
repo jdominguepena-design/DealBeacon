@@ -106,6 +106,7 @@ export async function runAccelaCollector(
   const dryRun = options.dryRun ?? false;
   const batchSize = options.batchSize ?? 500;
   const maxRecords = options.maxRecords ?? 50000;
+  const maxIncrementalThreshold = options.maxIncrementalThreshold ?? 1000;
   let offset = options.offset ?? 0;
 
   const startTime = Date.now();
@@ -182,6 +183,25 @@ export async function runAccelaCollector(
       const timestampExpr = formatArcGisTimestamp(cutoffDate);
       console.log(`[Incremental] Querying cases updated since: ${cutoffDate.toISOString()} (${timestampExpr})`);
       whereClause = encodeURIComponent(`lastupdated >= ${timestampExpr}`);
+
+      // Upstream Preflight: Verify total eligible records BEFORE any writes or paginated retrieval begin
+      try {
+        const countUrl = `${ACCELA_FEATURE_SERVER_URL}?where=${whereClause}&returnCountOnly=true&f=json`;
+        const countData = await fetchWithRetry(countUrl);
+        if (typeof countData?.count === 'number') {
+          console.log(`[Incremental] Upstream reports ${countData.count} eligible records (threshold: ${maxIncrementalThreshold})`);
+          if (countData.count > maxIncrementalThreshold) {
+            throw new Error(
+              `SAFEGUARD ABORT: Incremental ingestion upstream count is ${countData.count} records, exceeding safe incremental threshold of ${maxIncrementalThreshold}. If full reconciliation is intended, run with mode='full'.`
+            );
+          }
+        }
+      } catch (err: any) {
+        if (err.message && err.message.includes('SAFEGUARD ABORT:')) {
+          throw err;
+        }
+        console.warn(`[Incremental Preflight Warning] Count query failed (${err.message}). Proceeding with in-loop threshold checks.`);
+      }
     } else {
       console.log('[Full Reconciliation] Querying all records (1=1)...');
     }
@@ -197,6 +217,13 @@ export async function runAccelaCollector(
 
       result.totalFetched += features.length;
       result.batchesCompleted++;
+
+      // Safeguard against unexpected large ingestion volumes in incremental mode
+      if (mode === 'incremental' && result.totalFetched > maxIncrementalThreshold) {
+        throw new Error(
+          `SAFEGUARD ABORT: Incremental ingestion fetched ${result.totalFetched} records, exceeding safe incremental threshold of ${maxIncrementalThreshold}. If full reconciliation is intended, run with mode='full'.`
+        );
+      }
 
       // Bulk property lookup for this batch
       const batchPins = Array.from(

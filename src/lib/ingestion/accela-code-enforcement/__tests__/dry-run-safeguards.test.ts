@@ -173,6 +173,32 @@ async function runDryRunSafeguardsTests() {
   passed++;
   console.log('✔ PASS 6: Reconciliation design verified: unmentioned records are never marked closed');
 
+  // -------------------------------------------------------------------------
+  // Test 6: Incremental Volume Threshold Safeguard (Task 9)
+  // -------------------------------------------------------------------------
+  // If an incremental run encounters unexpected massive volume (> maxIncrementalThreshold),
+  // it must abort immediately to prevent full dataset overwrite in incremental mode.
+  let volumeSafeguardTriggered = false;
+  try {
+    await runAccelaCollector(
+      {
+        mode: 'incremental',
+        dryRun: true,
+        maxIncrementalThreshold: 1, // very low threshold to trigger safeguard
+        batchSize: 5,
+        sinceDate: new Date('2020-01-01'), // date that has records
+      },
+      mockPrisma
+    );
+  } catch (err: any) {
+    if (err.message.includes('SAFEGUARD ABORT: Incremental ingestion')) {
+      volumeSafeguardTriggered = true;
+    }
+  }
+  assert.strictEqual(volumeSafeguardTriggered, true, 'Incremental run must abort when fetched records exceed threshold');
+  passed++;
+  console.log('✔ PASS 7: Volume safeguard halts incremental collection if upstream delta exceeds threshold');
+
   console.log(`\n========================================================================`);
   console.log(`  ALL ${passed} SAFEGUARD & DRY-RUN UNIT TESTS PASSED!`);
   console.log(`========================================================================\n`);

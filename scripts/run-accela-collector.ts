@@ -54,6 +54,9 @@ async function main() {
   const sinceIdx = args.indexOf('--since');
   const sinceDate = sinceIdx !== -1 ? new Date(args[sinceIdx + 1]) : undefined;
 
+  const thresholdIdx = args.indexOf('--max-incremental-threshold');
+  const maxIncrementalThreshold = thresholdIdx !== -1 ? parseInt(args[thresholdIdx + 1], 10) : undefined;
+
   console.log(`Starting Accela Code Enforcement Collector...`);
   console.log(`Configuration: mode=${mode}, dryRun=${isDryRun}, batchSize=${batchSize}`);
   if (sinceDate) console.log(`Custom cutoff date: ${sinceDate.toISOString()}`);
@@ -68,6 +71,7 @@ async function main() {
     dryRun: isDryRun,
     batchSize,
     sinceDate,
+    maxIncrementalThreshold,
   });
 
   if (result.errors.length > 0) {

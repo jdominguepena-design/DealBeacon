@@ -1,14 +1,16 @@
 name: Ingest Omaha Accela Code Enforcement
 
 # Trigger Configuration:
-# - Scheduled daily execution is TEMPORARILY DISABLED for Stage 16a pilot validation.
-# - Push triggers are intentionally omitted to prevent accidental cloud ingestion on commit.
-# - Manual trigger (workflow_dispatch) ONLY, defaulting to dry-run (0 writes).
+# - Scheduled daily execution at 6:00 AM America/Chicago (11:00 UTC during CDT / 12:00 UTC during CST).
+#   Temporarily kept commented out awaiting final Stage 16h approval.
+# - Manual trigger (workflow_dispatch) with default dry-run (0 writes).
 #
-# To re-enable scheduled execution after cloud pilot sign-off:
+# To activate schedule after sign-off:
 # on:
 #   schedule:
-#     - cron: '0 6 * * *'
+#     - cron: '0 11 * * *'
+#   workflow_dispatch:
+#     ...
 
 on:
   workflow_dispatch:
@@ -34,7 +36,7 @@ on:
         options:
           - DEV
       confirm_live:
-        description: 'To execute live writes, set dry_run=false and enter CONFIRM_DEV_LIVE'
+        description: 'To execute live writes manually, set dry_run=false and enter CONFIRM_DEV_LIVE'
         required: false
         default: ''
         type: string
@@ -73,17 +75,30 @@ jobs:
         run: npx prisma generate
 
       - name: Verify Live Execution Safeguards
-        if: inputs.dry_run == false
         run: |
-          if [ "${{ inputs.target_env }}" != "DEV" ]; then
-            echo "❌ ERROR: Live execution is strictly restricted to DEV environment."
-            exit 1
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "✔ Scheduled execution trigger detected."
+            if [ "${{ vars.SCHEDULED_INGESTION_AUTHORIZED }}" != "AUTHORIZED_DEV_SCHEDULE" ]; then
+              echo "❌ ERROR: Scheduled ingestion is not authorized."
+              echo "Please set DEV environment variable SCHEDULED_INGESTION_AUTHORIZED='AUTHORIZED_DEV_SCHEDULE' in GitHub Settings."
+              exit 1
+            fi
+            echo "✔ Scheduled execution authorization verified."
+          else
+            if [ "${{ inputs.dry_run }}" = "false" ]; then
+              if [ "${{ inputs.target_env }}" != "DEV" ]; then
+                echo "❌ ERROR: Live execution is strictly restricted to DEV environment."
+                exit 1
+              fi
+              if [ "${{ inputs.confirm_live }}" != "CONFIRM_DEV_LIVE" ]; then
+                echo "❌ ERROR: Live execution requires explicit confirmation. Please set confirm_live to CONFIRM_DEV_LIVE."
+                exit 1
+              fi
+              echo "✔ Live DEV manual execution safeguards verified."
+            else
+              echo "✔ Dry-run mode confirmed (0 writes)."
+            fi
           fi
-          if [ "${{ inputs.confirm_live }}" != "CONFIRM_DEV_LIVE" ]; then
-            echo "❌ ERROR: Live execution requires explicit confirmation. Please set confirm_live to CONFIRM_DEV_LIVE."
-            exit 1
-          fi
-          echo "✔ Live DEV execution safeguards verified."
 
       - name: Verify Neon DEV Database Endpoint (Preflight Fail-Closed)
         env:
@@ -98,7 +113,10 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           NEON_DEV_ENDPOINT_ID: 'ep-restless-bonus-b4xv9ig1'
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "Executing Scheduled Accela Collector in LIVE DEV mode (incremental)..."
+            npx tsx scripts/run-accela-collector.ts --mode incremental --execute-live --confirm-live=CONFIRM_DEV_LIVE
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Executing Accela Collector in DRY-RUN mode (0 writes)..."
             npx tsx scripts/run-accela-collector.ts --mode ${{ inputs.mode }} --dry-run
           else
@@ -113,3 +131,11 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           NEON_DEV_ENDPOINT_ID: 'ep-restless-bonus-b4xv9ig1'
         run: npx tsx scripts/check-ingestion-health.ts
+
+      - name: Report Scheduled Run Failure
+        if: failure() && github.event_name == 'schedule'
+        run: |
+          echo "::error title=Scheduled Accela Ingestion Failed::The daily Accela code enforcement collection job failed on Neon DEV."
+          echo "### ❌ Scheduled Accela Collection Failed" >> $GITHUB_STEP_SUMMARY
+          echo "The automated daily Accela code enforcement ingestion encountered an error at $(date -u)." >> $GITHUB_STEP_SUMMARY
+          echo "Check the step logs above for details and verify Neon DEV branch health." >> $GITHUB_STEP_SUMMARY

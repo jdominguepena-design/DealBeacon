@@ -41,6 +41,7 @@ export interface AccelaCollectorOptions {
   dryRun?: boolean;
   batchSize?: number;
   maxRecords?: number;
+  maxIncrementalThreshold?: number;
   sinceDate?: Date;
   offset?: number;
 }
