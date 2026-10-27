@@ -1,0 +1,115 @@
+name: Ingest Omaha Accela Code Enforcement
+
+# Trigger Configuration:
+# - Scheduled daily execution is TEMPORARILY DISABLED for Stage 16a pilot validation.
+# - Push triggers are intentionally omitted to prevent accidental cloud ingestion on commit.
+# - Manual trigger (workflow_dispatch) ONLY, defaulting to dry-run (0 writes).
+#
+# To re-enable scheduled execution after cloud pilot sign-off:
+# on:
+#   schedule:
+#     - cron: '0 6 * * *'
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Ingestion Mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - full
+      dry_run:
+        description: 'Dry Run mode (0 DB writes). Default is true.'
+        required: true
+        default: true
+        type: boolean
+      target_env:
+        description: 'Target Environment (Safeguard: DEV only)'
+        required: true
+        default: 'DEV'
+        type: choice
+        options:
+          - DEV
+      confirm_live:
+        description: 'To execute live writes, set dry_run=false and enter CONFIRM_DEV_LIVE'
+        required: false
+        default: ''
+        type: string
+
+# Restrict workflow to minimum required access (read-only repository contents)
+permissions:
+  contents: read
+
+# Concurrency protection: prevent overlapping ingestion runs across dispatches
+concurrency:
+  group: ingestion-omaha-accela
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    name: Run Accela Collector
+    runs-on: ubuntu-latest
+    # Dedicated GitHub DEV environment for database secrets and environment protection rules
+    environment: DEV
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Verify Live Execution Safeguards
+        if: inputs.dry_run == false
+        run: |
+          if [ "${{ inputs.target_env }}" != "DEV" ]; then
+            echo "❌ ERROR: Live execution is strictly restricted to DEV environment."
+            exit 1
+          fi
+          if [ "${{ inputs.confirm_live }}" != "CONFIRM_DEV_LIVE" ]; then
+            echo "❌ ERROR: Live execution requires explicit confirmation. Please set confirm_live to CONFIRM_DEV_LIVE."
+            exit 1
+          fi
+          echo "✔ Live DEV execution safeguards verified."
+
+      - name: Verify Neon DEV Database Endpoint (Preflight Fail-Closed)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          NEON_DEV_ENDPOINT_ID: 'ep-restless-bonus-b4xv9ig1'
+        run: npx tsx scripts/verify-neon-dev-preflight.ts
+
+      - name: Run Accela Collector
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          NEON_DEV_ENDPOINT_ID: 'ep-restless-bonus-b4xv9ig1'
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "Executing Accela Collector in DRY-RUN mode (0 writes)..."
+            npx tsx scripts/run-accela-collector.ts --mode ${{ inputs.mode }} --dry-run
+          else
+            echo "Executing Accela Collector in LIVE DEV mode..."
+            npx tsx scripts/run-accela-collector.ts --mode ${{ inputs.mode }} --execute-live --confirm-live="${{ inputs.confirm_live }}"
+          fi
+
+      - name: Check Ingestion Health & Freshness
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          NEON_DEV_ENDPOINT_ID: 'ep-restless-bonus-b4xv9ig1'
+        run: npx tsx scripts/check-ingestion-health.ts
