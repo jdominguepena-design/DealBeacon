@@ -12,10 +12,18 @@ import {
 } from './types';
 import { classifyEnforcementStage, parseAccelaDate } from './normalize';
 
-const ACCELA_FEATURE_SERVER_URL =
-  'https://dcgis.org/server/rest/services/Hosted/Accela_Planning_Layers_view/FeatureServer/2/query';
+export const HISTORICAL_ACCELA_SOURCE = 'OMAHA_ACCELA_CODE_ENFORCEMENT';
+export const ACTIVE_CODE_VIOLATIONS_SOURCE = 'OMAHA_CODE_VIOLATIONS_ACTIVE';
+export const CODE_ENFORCEMENT_SHARED_LOCK = 'OMAHA_CODE_ENFORCEMENT_SHARED_LOCK';
 
-const SOURCE_NAME = 'OMAHA_ACCELA_CODE_ENFORCEMENT';
+export const HISTORICAL_ACCELA_FEATURE_SERVER_URL =
+  'https://dcgis.org/server/rest/services/Hosted/Accela_Planning_Layers_view/FeatureServer/2/query';
+export const ACTIVE_CODE_VIOLATIONS_FEATURE_SERVER_URL =
+  'https://dcgis.org/server/rest/services/Hosted/Omaha_Code_Violations_view/FeatureServer/0/query';
+
+// Default backward compatibility bindings
+const ACCELA_FEATURE_SERVER_URL = HISTORICAL_ACCELA_FEATURE_SERVER_URL;
+const SOURCE_NAME = HISTORICAL_ACCELA_SOURCE;
 
 async function fetchWithRetry(
   url: string,
@@ -67,11 +75,12 @@ export function formatArcGisTimestamp(d: Date): string {
  */
 export async function getIncrementalCutoffDate(
   prisma: PrismaClient,
-  fallbackDays: number = 2
+  fallbackDays: number = 2,
+  sourceName: string = HISTORICAL_ACCELA_SOURCE
 ): Promise<Date> {
   const lastSuccess = await prisma.ingestionRun.findFirst({
     where: {
-      sourceName: SOURCE_NAME,
+      sourceName,
       status: 'SUCCESS',
     },
     orderBy: { startedAt: 'desc' },
@@ -102,35 +111,47 @@ export async function runAccelaCollector(
   options: AccelaCollectorOptions = {},
   prisma: PrismaClient = defaultPrisma
 ): Promise<AccelaCollectorResult> {
+  const source = options.source ?? 'historical';
+  const sourceName =
+    options.sourceName ??
+    (source === 'active' ? ACTIVE_CODE_VIOLATIONS_SOURCE : HISTORICAL_ACCELA_SOURCE);
+  const featureServerUrl =
+    options.featureServerUrl ??
+    (source === 'active'
+      ? ACTIVE_CODE_VIOLATIONS_FEATURE_SERVER_URL
+      : HISTORICAL_ACCELA_FEATURE_SERVER_URL);
   const mode = options.mode ?? 'incremental';
   const dryRun = options.dryRun ?? false;
   const batchSize = options.batchSize ?? 500;
   const maxRecords = options.maxRecords ?? 50000;
   const maxIncrementalThreshold = options.maxIncrementalThreshold ?? 1000;
+  const maxSnapshotThreshold = options.maxSnapshotThreshold ?? (source === 'active' ? 2500 : 50000);
   let offset = options.offset ?? 0;
 
   const startTime = Date.now();
   const runId = `run-accela-${Date.now()}`;
 
   console.log('========================================================================');
-  console.log(`  ACCELA CODE ENFORCEMENT AUTOMATED COLLECTOR`);
+  console.log(`  ACCELA / OMAHA CODE ENFORCEMENT COLLECTOR`);
+  console.log(`  Source: ${sourceName} (${source.toUpperCase()})`);
   console.log(`  Mode: ${mode.toUpperCase()} | Dry Run: ${dryRun ? 'YES (0 writes)' : 'NO (live writes)'}`);
   console.log('========================================================================\n');
 
-  // 1. Concurrency Protection via Session-Level Advisory Lock
+  // 1. Concurrency Protection via Session-Level Shared Advisory Lock
   let directClient: PrismaClient | null = null;
   let lockAcquired = false;
+  const lockKey = CODE_ENFORCEMENT_SHARED_LOCK;
 
   if (process.env.DIRECT_URL) {
     try {
       directClient = createDedicatedDirectLockClient();
-      const lockRes = await acquireIngestionAdvisoryLock(directClient, SOURCE_NAME);
+      const lockRes = await acquireIngestionAdvisoryLock(directClient, lockKey);
       if (!lockRes.acquired) {
         console.warn(`[Lock] Skipping collector run: ${lockRes.reason}`);
         throw new Error(`Concurrent job active: ${lockRes.reason}`);
       }
       lockAcquired = true;
-      console.log(`✔ Acquired session advisory lock for "${SOURCE_NAME}".`);
+      console.log(`✔ Acquired session advisory lock for "${lockKey}".`);
     } catch (err: any) {
       if (directClient) await directClient.$disconnect().catch(() => {});
       throw err;
@@ -143,10 +164,10 @@ export async function runAccelaCollector(
   if (!dryRun) {
     const run = await prisma.ingestionRun.create({
       data: {
-        sourceName: SOURCE_NAME,
+        sourceName,
         status: 'RUNNING',
         recordsIngested: 0,
-        statsJson: { mode, runId, batchSize },
+        statsJson: { mode, runId, batchSize, sourceName },
       },
     });
     ingestionRunDbId = run.id;
@@ -179,14 +200,14 @@ export async function runAccelaCollector(
     // 2. Build Query Where Clause
     let whereClause = '1%3D1';
     if (mode === 'incremental') {
-      const cutoffDate = options.sinceDate || (await getIncrementalCutoffDate(prisma));
+      const cutoffDate = options.sinceDate || (await getIncrementalCutoffDate(prisma, 2, sourceName));
       const timestampExpr = formatArcGisTimestamp(cutoffDate);
       console.log(`[Incremental] Querying cases updated since: ${cutoffDate.toISOString()} (${timestampExpr})`);
       whereClause = encodeURIComponent(`lastupdated >= ${timestampExpr}`);
 
       // Upstream Preflight: Verify total eligible records BEFORE any writes or paginated retrieval begin
       try {
-        const countUrl = `${ACCELA_FEATURE_SERVER_URL}?where=${whereClause}&returnCountOnly=true&f=json`;
+        const countUrl = `${featureServerUrl}?where=${whereClause}&returnCountOnly=true&f=json`;
         const countData = await fetchWithRetry(countUrl);
         if (typeof countData?.count === 'number') {
           console.log(`[Incremental] Upstream reports ${countData.count} eligible records (threshold: ${maxIncrementalThreshold})`);
@@ -203,13 +224,33 @@ export async function runAccelaCollector(
         console.warn(`[Incremental Preflight Warning] Count query failed (${err.message}). Proceeding with in-loop threshold checks.`);
       }
     } else {
-      console.log('[Full Reconciliation] Querying all records (1=1)...');
+      console.log(`[Full Reconciliation] Querying all records (1=1)...`);
+      if (source === 'active') {
+        // Preflight volume check for active snapshot
+        try {
+          const countUrl = `${featureServerUrl}?where=1%3D1&returnCountOnly=true&f=json`;
+          const countData = await fetchWithRetry(countUrl);
+          if (typeof countData?.count === 'number') {
+            console.log(`[Active Snapshot Preflight] Upstream reports ${countData.count} active records (threshold: ${maxSnapshotThreshold})`);
+            if (countData.count > maxSnapshotThreshold) {
+              throw new Error(
+                `SAFEGUARD ABORT: Active code violations snapshot count is ${countData.count} records, exceeding safe threshold of ${maxSnapshotThreshold}.`
+              );
+            }
+          }
+        } catch (err: any) {
+          if (err.message && err.message.includes('SAFEGUARD ABORT:')) {
+            throw err;
+          }
+          console.warn(`[Active Snapshot Warning] Count query failed (${err.message}). Proceeding.`);
+        }
+      }
     }
 
     // 3. Page through records
     while (result.totalFetched < maxRecords) {
       const fetchCount = Math.min(batchSize, maxRecords - result.totalFetched);
-      const queryUrl = `${ACCELA_FEATURE_SERVER_URL}?where=${whereClause}&outFields=*&resultOffset=${offset}&resultRecordCount=${fetchCount}&f=json`;
+      const queryUrl = `${featureServerUrl}?where=${whereClause}&outFields=*&resultOffset=${offset}&resultRecordCount=${fetchCount}&f=json`;
 
       const data = await fetchWithRetry(queryUrl);
       const features: AccelaRawFeature[] = (data.features || []).map((f: any) => f.attributes);
@@ -225,12 +266,18 @@ export async function runAccelaCollector(
         );
       }
 
-      // Bulk property lookup for this batch
-      const batchPins = Array.from(
-        new Set(features.map((f) => (f.pin || '').trim()).filter((p) => p.length > 0))
-      );
+      // Extract raw PINs and candidate 10-digit zero-padded PINs
+      const rawPins = features.map((f) => (f.pin || '').trim()).filter((p) => p.length > 0);
+      const candidatePins = new Set<string>();
+      for (const p of rawPins) {
+        candidatePins.add(p);
+        if (/^\d{1,9}$/.test(p)) {
+          candidatePins.add(p.padStart(10, '0'));
+        }
+      }
+
       const matchedProps = await prisma.property.findMany({
-        where: { parcelId: { in: batchPins } },
+        where: { parcelId: { in: Array.from(candidatePins) } },
         select: { id: true, parcelId: true },
       });
       const propertyByPin = new Map(matchedProps.map((p) => [p.parcelId, p]));
@@ -254,7 +301,26 @@ export async function runAccelaCollector(
 
         const sourcePin = (raw.pin || '').trim();
         const stage = classifyEnforcementStage(raw.statuscurrentmapped, raw.statuscurrent);
-        const matchedProp = sourcePin ? propertyByPin.get(sourcePin) : undefined;
+
+        // 1. Raw exact PIN match first
+        let matchedProp = sourcePin ? propertyByPin.get(sourcePin) : undefined;
+        let matchStatus: string;
+
+        if (matchedProp) {
+          matchStatus = 'MATCHED_EXACT_PIN';
+        } else if (sourcePin && /^\d{1,9}$/.test(sourcePin)) {
+          // 2. Exact match after restoring missing leading zeros
+          const padded = sourcePin.padStart(10, '0');
+          const candidateProp = propertyByPin.get(padded);
+          if (candidateProp) {
+            matchedProp = candidateProp;
+            matchStatus = 'MATCHED_EXACT_PIN';
+          } else {
+            matchStatus = 'UNMATCHED_COUNTY_PIN';
+          }
+        } else {
+          matchStatus = 'UNMATCHED_COUNTY_PIN';
+        }
         const isMatched = Boolean(matchedProp);
 
         if (isMatched) {
@@ -304,7 +370,26 @@ export async function runAccelaCollector(
 
               const sourcePin = (raw.pin || '').trim();
               const stage = classifyEnforcementStage(raw.statuscurrentmapped, raw.statuscurrent);
-              const matchedProp = sourcePin ? propertyByPin.get(sourcePin) : undefined;
+
+              // 1. Raw exact PIN match first
+              let matchedProp = sourcePin ? propertyByPin.get(sourcePin) : undefined;
+              let matchStatus: string;
+
+              if (matchedProp) {
+                matchStatus = 'MATCHED_EXACT_PIN';
+              } else if (sourcePin && /^\d{1,9}$/.test(sourcePin)) {
+                // 2. Exact match after restoring missing leading zeros
+                const padded = sourcePin.padStart(10, '0');
+                const candidateProp = propertyByPin.get(padded);
+                if (candidateProp) {
+                  matchedProp = candidateProp;
+                  matchStatus = 'MATCHED_EXACT_PIN';
+                } else {
+                  matchStatus = 'UNMATCHED_COUNTY_PIN';
+                }
+              } else {
+                matchStatus = 'UNMATCHED_COUNTY_PIN';
+              }
               const isMatched = Boolean(matchedProp);
 
               const isVacant = String(raw.vacant || '').trim().toLowerCase() === 'yes';
@@ -321,16 +406,16 @@ export async function runAccelaCollector(
               const demoIssuedDate = parseAccelaDate(raw.demo_issued_date);
               const lastUpdatedSource = parseAccelaDate(raw.lastupdated);
 
-              // 1. SourceRecord (Immutable raw provenance)
+              // 1. SourceRecord (Source-specific raw provenance)
               const sourceRecord = await (prisma as any).sourceRecord.upsert({
                 where: {
                   sourceName_sourceRecordId: {
-                    sourceName: SOURCE_NAME,
+                    sourceName,
                     sourceRecordId: caseNumber,
                   },
                 },
                 create: {
-                  sourceName: SOURCE_NAME,
+                  sourceName,
                   sourceRecordId: caseNumber,
                   propertyId: matchedProp ? matchedProp.id : null,
                   rawPayloadJson: raw as any,
@@ -338,10 +423,9 @@ export async function runAccelaCollector(
                   matchedStatus: isMatched ? 'MATCHED' : 'UNMATCHED',
                 },
                 update: {
-                  propertyId: matchedProp ? matchedProp.id : null,
+                  ...(matchedProp ? { propertyId: matchedProp.id, matchedStatus: 'MATCHED' } : {}),
                   rawPayloadJson: raw as any,
                   ingestionRunId: ingestionRunDbId,
-                  matchedStatus: isMatched ? 'MATCHED' : 'UNMATCHED',
                 },
               });
 
@@ -349,13 +433,13 @@ export async function runAccelaCollector(
               await (prisma as any).codeViolation.upsert({
                 where: { caseNumber },
                 create: {
-                  sourceName: SOURCE_NAME,
-                  sourceObjectId: raw.objectid,
-                  sourceGlobalId: raw.globalid,
+                  sourceName,
+                  sourceObjectId: raw.objectid ?? null,
+                  sourceGlobalId: raw.globalid ? String(raw.globalid) : null,
                   caseNumber,
                   sourcePin,
                   propertyId: matchedProp ? matchedProp.id : null,
-                  matchStatus: isMatched ? 'MATCHED_EXACT_PIN' : 'UNMATCHED_COUNTY_PIN',
+                  matchStatus,
                   caseType: raw.casetype || 'Housing Inspection Case',
                   caseRecordClassMapped: raw.caserecordclassmapped || null,
                   statusCurrent: raw.statuscurrent || 'Unknown',
@@ -385,26 +469,26 @@ export async function runAccelaCollector(
                   latestSourceRecordId: sourceRecord.id,
                 },
                 update: {
-                  propertyId: matchedProp ? matchedProp.id : null,
-                  matchStatus: isMatched ? 'MATCHED_EXACT_PIN' : 'UNMATCHED_COUNTY_PIN',
-                  sourceObjectId: raw.objectid,
-                  sourceGlobalId: raw.globalid,
-                  caseType: raw.casetype || 'Housing Inspection Case',
-                  caseRecordClassMapped: raw.caserecordclassmapped || null,
+                  ...(matchedProp
+                    ? { propertyId: matchedProp.id, matchStatus: 'MATCHED_EXACT_PIN' }
+                    : {}),
+                  ...(raw.objectid !== undefined ? { sourceObjectId: raw.objectid } : {}),
+                  ...(raw.globalid ? { sourceGlobalId: String(raw.globalid) } : {}),
+                  ...(raw.casetype ? { caseType: raw.casetype } : {}),
+                  ...(raw.caserecordclassmapped ? { caseRecordClassMapped: raw.caserecordclassmapped } : {}),
                   statusCurrent: raw.statuscurrent || 'Unknown',
                   statusCurrentMapped: raw.statuscurrentmapped || 'Unknown',
                   enforcementStage: stage,
                   status: raw.statuscurrentmapped || 'OPEN',
                   description: `Housing Inspection Case: ${raw.statuscurrent || 'In Progress'}`,
-                  inspectorNotes: raw.vacate_reason ? `Vacate reason: ${raw.vacate_reason}` : null,
+                  ...(raw.vacate_reason ? { inspectorNotes: `Vacate reason: ${raw.vacate_reason}`, vacateReason: raw.vacate_reason } : {}),
                   isVacant,
-                  vacateReason: raw.vacate_reason || null,
                   hasDemoOrder,
-                  demoIssuedDate,
-                  lastReInspectionDate,
-                  complianceDeadline,
-                  complianceDate,
-                  lastUpdatedSource,
+                  ...(demoIssuedDate !== null ? { demoIssuedDate } : {}),
+                  ...(lastReInspectionDate !== null ? { lastReInspectionDate } : {}),
+                  ...(complianceDeadline !== null ? { complianceDeadline } : {}),
+                  ...(complianceDate !== null ? { complianceDate } : {}),
+                  ...(lastUpdatedSource !== null ? { lastUpdatedSource } : {}),
                   latestSourceRecordId: sourceRecord.id,
                 },
               });
@@ -470,9 +554,9 @@ export async function runAccelaCollector(
     throw err;
   } finally {
     if (directClient && lockAcquired) {
-      await releaseIngestionAdvisoryLock(directClient, SOURCE_NAME).catch(() => {});
+      await releaseIngestionAdvisoryLock(directClient, lockKey).catch(() => {});
       await directClient.$disconnect().catch(() => {});
-      console.log(`✔ Released advisory lock for "${SOURCE_NAME}".`);
+      console.log(`✔ Released advisory lock for "${lockKey}".`);
     }
   }
 }

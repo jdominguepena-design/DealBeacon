@@ -31,7 +31,7 @@
     "test:e2e:dashboard": "tsx tests/e2e/dashboard-acceptance.e2e.ts",
     "test:e2e:hotline-review": "tsx tests/e2e/hotline-review-acceptance.e2e.ts",
     "test:e2e": "tsx tests/e2e/dashboard-acceptance.e2e.ts && tsx tests/e2e/properties-acceptance.e2e.ts && tsx tests/e2e/hotline-review-acceptance.e2e.ts",
-    "test:accela": "tsx src/lib/ingestion/accela-code-enforcement/__tests__/collector.test.ts && tsx src/lib/ingestion/accela-code-enforcement/__tests__/dry-run-safeguards.test.ts",
+    "test:accela": "tsx src/lib/ingestion/accela-code-enforcement/__tests__/collector.test.ts && tsx src/lib/ingestion/accela-code-enforcement/__tests__/dry-run-safeguards.test.ts && tsx src/lib/ingestion/accela-code-enforcement/__tests__/active-collector.test.ts",
     "test:tax-lien": "tsx src/lib/ingestion/douglas-tax-lien/__tests__/douglas-tax-lien.test.ts",
     "test:linkers": "tsx src/lib/matching/__tests__/hotline-linker.test.ts && tsx src/lib/matching/__tests__/tax-lien-linker.test.ts",
     "preflight:dev": "tsx scripts/verify-neon-dev-preflight.ts",

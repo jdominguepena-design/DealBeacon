@@ -35,13 +35,18 @@ export type EnforcementStage =
   | 'UNKNOWN_STAGE';
 
 export type CollectorMode = 'incremental' | 'full';
+export type CollectorSource = 'historical' | 'active';
 
 export interface AccelaCollectorOptions {
+  source?: CollectorSource;
+  sourceName?: string;
+  featureServerUrl?: string;
   mode?: CollectorMode;
   dryRun?: boolean;
   batchSize?: number;
   maxRecords?: number;
   maxIncrementalThreshold?: number;
+  maxSnapshotThreshold?: number;
   sinceDate?: Date;
   offset?: number;
 }

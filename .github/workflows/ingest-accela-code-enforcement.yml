@@ -15,14 +15,22 @@ name: Ingest Omaha Accela Code Enforcement
 on:
   workflow_dispatch:
     inputs:
+      source:
+        description: 'Code Enforcement Source (active = Omaha_Code_Violations_view, historical = Accela 2024)'
+        required: true
+        default: 'active'
+        type: choice
+        options:
+          - active
+          - historical
       mode:
         description: 'Ingestion Mode'
         required: true
-        default: 'incremental'
+        default: 'full'
         type: choice
         options:
-          - incremental
           - full
+          - incremental
       dry_run:
         description: 'Dry Run mode (0 DB writes). Default is true.'
         required: true
@@ -114,14 +122,14 @@ jobs:
           NEON_DEV_ENDPOINT_ID: 'ep-restless-bonus-b4xv9ig1'
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "Executing Scheduled Accela Collector in LIVE DEV mode (incremental)..."
-            npx tsx scripts/run-accela-collector.ts --mode incremental --execute-live --confirm-live=CONFIRM_DEV_LIVE
+            echo "Executing Scheduled Accela Collector in LIVE DEV mode (active full snapshot)..."
+            npx tsx scripts/run-accela-collector.ts --source active --mode full --execute-live --confirm-live=CONFIRM_DEV_LIVE
           elif [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Executing Accela Collector in DRY-RUN mode (0 writes)..."
-            npx tsx scripts/run-accela-collector.ts --mode ${{ inputs.mode }} --dry-run
+            npx tsx scripts/run-accela-collector.ts --source ${{ inputs.source }} --mode ${{ inputs.mode }} --dry-run
           else
             echo "Executing Accela Collector in LIVE DEV mode..."
-            npx tsx scripts/run-accela-collector.ts --mode ${{ inputs.mode }} --execute-live --confirm-live="${{ inputs.confirm_live }}"
+            npx tsx scripts/run-accela-collector.ts --source ${{ inputs.source }} --mode ${{ inputs.mode }} --execute-live --confirm-live="${{ inputs.confirm_live }}"
           fi
 
       - name: Check Ingestion Health & Freshness

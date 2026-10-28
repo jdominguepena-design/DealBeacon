@@ -21,7 +21,10 @@ async function main() {
   });
 
   // 2. Parse Execution Mode
-  const isFull = args.includes('--full') || (args.includes('--mode') && args[args.indexOf('--mode') + 1] === 'full');
+  const isFull =
+    args.includes('--full') ||
+    args.some((a) => a === '--mode=full') ||
+    (args.includes('--mode') && args[args.indexOf('--mode') + 1] === 'full');
   const mode = isFull ? 'full' : 'incremental';
 
   // 3. Dry-Run is strictly the default. Live requires explicit flags AND confirmation string.
@@ -48,6 +51,12 @@ async function main() {
     isDryRun = false;
   }
 
+  const sourceIdx = args.findIndex((a) => a.startsWith('--source=') || a === '--source');
+  const sourceVal = sourceIdx !== -1
+    ? (args[sourceIdx].startsWith('--source=') ? args[sourceIdx].split('=')[1] : args[sourceIdx + 1])
+    : 'historical';
+  const source = sourceVal === 'active' ? 'active' : 'historical';
+
   const batchSizeIdx = args.indexOf('--batch-size');
   const batchSize = batchSizeIdx !== -1 ? parseInt(args[batchSizeIdx + 1], 10) : 500;
 
@@ -57,8 +66,11 @@ async function main() {
   const thresholdIdx = args.indexOf('--max-incremental-threshold');
   const maxIncrementalThreshold = thresholdIdx !== -1 ? parseInt(args[thresholdIdx + 1], 10) : undefined;
 
-  console.log(`Starting Accela Code Enforcement Collector...`);
-  console.log(`Configuration: mode=${mode}, dryRun=${isDryRun}, batchSize=${batchSize}`);
+  const snapshotThresholdIdx = args.indexOf('--max-snapshot-threshold');
+  const maxSnapshotThreshold = snapshotThresholdIdx !== -1 ? parseInt(args[snapshotThresholdIdx + 1], 10) : undefined;
+
+  console.log(`Starting Accela / Omaha Code Enforcement Collector...`);
+  console.log(`Configuration: source=${source}, mode=${mode}, dryRun=${isDryRun}, batchSize=${batchSize}`);
   if (sinceDate) console.log(`Custom cutoff date: ${sinceDate.toISOString()}`);
   if (isDryRun) {
     console.log(`✔ DRY-RUN SAFEGUARD ACTIVE: Zero database writes will be executed.`);
@@ -67,11 +79,13 @@ async function main() {
   }
 
   const result = await runAccelaCollector({
+    source,
     mode,
     dryRun: isDryRun,
     batchSize,
     sinceDate,
     maxIncrementalThreshold,
+    maxSnapshotThreshold,
   });
 
   if (result.errors.length > 0) {
