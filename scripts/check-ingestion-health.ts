@@ -24,12 +24,97 @@ export interface SourceHealthMetrics {
 }
 
 export const FRESHNESS_THRESHOLDS_HOURS: Record<string, number> = {
-  OMAHA_CODE_VIOLATIONS_ACTIVE: 48,      // Daily active full snapshot
+  OMAHA_CODE_VIOLATIONS_ACTIVE: 48,      // Daily active full sync / in-place state reconciliation
   OMAHA_ACCELA_CODE_ENFORCEMENT: 8760,   // Static historical 2024 extract (1 year baseline)
   OMAHA_HOTLINE: 168,                    // Weekly public complaints refresh (7 days)
   DOUGLAS_COUNTY_TAX_LIEN: 720,          // Monthly tax sale delinquency roll (30 days)
   DOUGLAS_COUNTY_ASSESSOR: 720,          // Monthly countywide GIS parcel refresh (30 days)
 };
+
+export function evaluatePipelineHealth(params: {
+  source: string;
+  latestRun: { id: string; status: string; startedAt: Date } | null;
+  lastSuccessRun: { id: string; completedAt: Date | null } | null;
+  now?: number;
+}): {
+  hoursSinceLastSuccess: number | null;
+  pipelineHealth: SourceHealthMetrics['pipelineHealth'];
+  alert: string;
+} {
+  const now = params.now ?? Date.now();
+  const threshold = FRESHNESS_THRESHOLDS_HOURS[params.source] || 48;
+
+  let hoursSinceLastSuccess: number | null = null;
+  if (params.lastSuccessRun?.completedAt) {
+    hoursSinceLastSuccess = parseFloat(
+      ((now - params.lastSuccessRun.completedAt.getTime()) / (1000 * 60 * 60)).toFixed(1)
+    );
+  }
+
+  const isStale = hoursSinceLastSuccess !== null && hoursSinceLastSuccess > threshold;
+  const hasStuckRun =
+    params.latestRun?.status === 'RUNNING' && now - params.latestRun.startedAt.getTime() > 60 * 60 * 1000;
+  const hasRecentFailure = params.latestRun?.status === 'FAILED';
+
+  let pipelineHealth: SourceHealthMetrics['pipelineHealth'] = 'HEALTHY';
+  let alert = 'OK (Healthy)';
+
+  // Failures and stuck runs override any previous success timestamp
+  if (hasStuckRun) {
+    pipelineHealth = 'STUCK';
+    alert = 'ALERT: Run stuck in RUNNING > 60m';
+  } else if (hasRecentFailure) {
+    pipelineHealth = 'FAILED';
+    alert = `ALERT: Latest run FAILED (${params.latestRun?.id})`;
+  } else if (isStale) {
+    pipelineHealth = 'STALE';
+    alert = `WARNING: Ingestion Stale (${hoursSinceLastSuccess}h > ${threshold}h)`;
+  } else if (!params.latestRun) {
+    pipelineHealth = 'NO_RUNS';
+    alert = 'NOTICE: No IngestionRuns recorded';
+  }
+
+  return { hoursSinceLastSuccess, pipelineHealth, alert };
+}
+
+export function evaluateUpstreamFreshness(params: {
+  source: string;
+  latestUpstreamUpdateAt: Date | null;
+  now?: number;
+}): {
+  daysSinceUpstreamUpdate: number | null;
+  upstreamDataFreshness: SourceHealthMetrics['upstreamDataFreshness'];
+  upstreamStatusMessage: string;
+} {
+  const now = params.now ?? Date.now();
+  let daysSinceUpstreamUpdate: number | null = null;
+  if (params.latestUpstreamUpdateAt) {
+    daysSinceUpstreamUpdate = parseFloat(
+      ((now - params.latestUpstreamUpdateAt.getTime()) / (1000 * 60 * 60 * 24)).toFixed(1)
+    );
+  }
+
+  let upstreamDataFreshness: SourceHealthMetrics['upstreamDataFreshness'] = 'UNKNOWN';
+  let upstreamStatusMessage = 'Unknown publisher state';
+
+  if (params.source === 'OMAHA_ACCELA_CODE_ENFORCEMENT') {
+    upstreamDataFreshness = 'STATIC_BASELINE';
+    upstreamStatusMessage = 'Static 2024 Baseline (Final extract)';
+  } else if (daysSinceUpstreamUpdate !== null) {
+    if (daysSinceUpstreamUpdate <= 7) {
+      upstreamDataFreshness = 'FRESH';
+      upstreamStatusMessage = `Fresh (updated ${daysSinceUpstreamUpdate}d ago)`;
+    } else if (daysSinceUpstreamUpdate > 30) {
+      upstreamDataFreshness = 'STAGNANT';
+      upstreamStatusMessage = `WARNING: Stagnant (${daysSinceUpstreamUpdate}d without publisher update)`;
+    } else {
+      upstreamDataFreshness = 'FRESH';
+      upstreamStatusMessage = `Current (${daysSinceUpstreamUpdate}d ago)`;
+    }
+  }
+
+  return { daysSinceUpstreamUpdate, upstreamDataFreshness, upstreamStatusMessage };
+}
 
 export async function checkIngestionHealth(options: { skipPreflight?: boolean } = {}): Promise<{
   allHealthy: boolean;
@@ -69,9 +154,10 @@ export async function checkIngestionHealth(options: { skipPreflight?: boolean } 
     // 1. Source-specific counts and upstream timestamps
     if (source === 'OMAHA_CODE_VIOLATIONS_ACTIVE') {
       displayName = 'Active Code Violations';
-      cadenceRecommendation = 'Daily Full Snapshot (24-48h threshold)';
+      cadenceRecommendation = 'Daily Full Sync / In-Place State Reconciliation (24-48h threshold)';
       totalSourceRecords = await prisma.sourceRecord.count({ where: { sourceName: source } });
 
+      // In-place SourceRecord updates reflect current active cases; not immutable historical snapshots.
       // Represents all 1,175 active cases, including the 245 cases whose CodeViolation.sourceName remains historical
       const activeViolations = await prisma.codeViolation.findMany({
         where: {
@@ -166,66 +252,22 @@ export async function checkIngestionHealth(options: { skipPreflight?: boolean } 
       orderBy: { completedAt: 'desc' },
     });
 
-    let hoursSinceLastSuccess: number | null = null;
-    if (lastSuccessRun?.completedAt) {
-      hoursSinceLastSuccess = parseFloat(
-        ((now - lastSuccessRun.completedAt.getTime()) / (1000 * 60 * 60)).toFixed(1)
-      );
-    }
-
-    let daysSinceUpstreamUpdate: number | null = null;
-    if (latestUpstreamUpdateAt) {
-      daysSinceUpstreamUpdate = parseFloat(
-        ((now - latestUpstreamUpdateAt.getTime()) / (1000 * 60 * 60 * 24)).toFixed(1)
-      );
-    }
-
     // 3. Independent Evaluation: Pipeline Status vs. Upstream Publisher Freshness
-    const threshold = FRESHNESS_THRESHOLDS_HOURS[source] || 48;
-    const isStale = hoursSinceLastSuccess !== null && hoursSinceLastSuccess > threshold;
-    const hasStuckRun =
-      latestRun?.status === 'RUNNING' && now - latestRun.startedAt.getTime() > 60 * 60 * 1000;
-    const hasRecentFailure = latestRun?.status === 'FAILED';
+    const pipelineEval = evaluatePipelineHealth({
+      source,
+      latestRun: latestRun ? { id: latestRun.id, status: latestRun.status, startedAt: latestRun.startedAt } : null,
+      lastSuccessRun: lastSuccessRun ? { id: lastSuccessRun.id, completedAt: lastSuccessRun.completedAt } : null,
+      now,
+    });
 
-    let pipelineHealth: SourceHealthMetrics['pipelineHealth'] = 'HEALTHY';
-    let alert = 'OK (Healthy)';
+    const upstreamEval = evaluateUpstreamFreshness({
+      source,
+      latestUpstreamUpdateAt,
+      now,
+    });
 
-    // Failures and stuck runs override any previous success timestamp
-    if (hasStuckRun) {
-      pipelineHealth = 'STUCK';
-      alert = 'ALERT: Run stuck in RUNNING > 60m';
+    if (pipelineEval.pipelineHealth === 'STUCK' || pipelineEval.pipelineHealth === 'FAILED' || pipelineEval.pipelineHealth === 'STALE') {
       allHealthy = false;
-    } else if (hasRecentFailure) {
-      pipelineHealth = 'FAILED';
-      alert = `ALERT: Latest run FAILED (${latestRun?.id})`;
-      allHealthy = false;
-    } else if (isStale) {
-      pipelineHealth = 'STALE';
-      alert = `WARNING: Ingestion Stale (${hoursSinceLastSuccess}h > ${threshold}h)`;
-      allHealthy = false;
-    } else if (!latestRun) {
-      pipelineHealth = 'NO_RUNS';
-      alert = 'NOTICE: No IngestionRuns recorded';
-    }
-
-    // Upstream publisher evaluation (reported independently of pipeline health)
-    let upstreamDataFreshness: SourceHealthMetrics['upstreamDataFreshness'] = 'UNKNOWN';
-    let upstreamStatusMessage = 'Unknown publisher state';
-
-    if (source === 'OMAHA_ACCELA_CODE_ENFORCEMENT') {
-      upstreamDataFreshness = 'STATIC_BASELINE';
-      upstreamStatusMessage = 'Static 2024 Baseline (Final extract)';
-    } else if (daysSinceUpstreamUpdate !== null) {
-      if (daysSinceUpstreamUpdate <= 7) {
-        upstreamDataFreshness = 'FRESH';
-        upstreamStatusMessage = `Fresh (updated ${daysSinceUpstreamUpdate}d ago)`;
-      } else if (daysSinceUpstreamUpdate > 30) {
-        upstreamDataFreshness = 'STAGNANT';
-        upstreamStatusMessage = `WARNING: Stagnant (${daysSinceUpstreamUpdate}d without publisher update)`;
-      } else {
-        upstreamDataFreshness = 'FRESH';
-        upstreamStatusMessage = `Current (${daysSinceUpstreamUpdate}d ago)`;
-      }
     }
 
     results.push({
@@ -238,14 +280,14 @@ export async function checkIngestionHealth(options: { skipPreflight?: boolean } 
       latestRunId: latestRun?.id || null,
       latestStatus: latestRun?.status || null,
       lastSuccessAt: lastSuccessRun?.completedAt?.toISOString() || null,
-      hoursSinceLastSuccess,
+      hoursSinceLastSuccess: pipelineEval.hoursSinceLastSuccess,
       latestUpstreamUpdateAt: latestUpstreamUpdateAt?.toISOString() || null,
-      daysSinceUpstreamUpdate,
-      pipelineHealth,
-      upstreamDataFreshness,
-      upstreamStatusMessage,
+      daysSinceUpstreamUpdate: upstreamEval.daysSinceUpstreamUpdate,
+      pipelineHealth: pipelineEval.pipelineHealth,
+      upstreamDataFreshness: upstreamEval.upstreamDataFreshness,
+      upstreamStatusMessage: upstreamEval.upstreamStatusMessage,
       cadenceRecommendation,
-      alert,
+      alert: pipelineEval.alert,
     });
   }
 

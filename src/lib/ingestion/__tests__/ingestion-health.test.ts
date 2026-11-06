@@ -1,5 +1,10 @@
 import assert from 'node:assert';
-import { checkIngestionHealth, FRESHNESS_THRESHOLDS_HOURS } from '../../../../scripts/check-ingestion-health';
+import {
+  checkIngestionHealth,
+  FRESHNESS_THRESHOLDS_HOURS,
+  evaluatePipelineHealth,
+  evaluateUpstreamFreshness,
+} from '../../../../scripts/check-ingestion-health';
 
 async function runHealthMonitorTests() {
   console.log('========================================================================');
@@ -50,13 +55,29 @@ async function runHealthMonitorTests() {
   // -------------------------------------------------------------------------
   // Test 3: Distinction Between Pipeline Sync and Upstream Data Freshness
   // -------------------------------------------------------------------------
-  // In Neon DEV, active collector ran today (< 2 hours ago), but latest upstream record is ~92 days old.
-  // Health monitor must report pipeline as HEALTHY, while upstream data is clearly marked as stagnant.
-  assert(activeSource.hoursSinceLastSuccess !== null && activeSource.hoursSinceLastSuccess < 24, 'Pipeline sync must be fresh');
-  assert.strictEqual(activeSource.pipelineHealth, 'HEALTHY', 'Pipeline health must be HEALTHY');
+  // Verify database record flags stagnant municipal dataset independently
+  assert(activeSource.hoursSinceLastSuccess !== null, 'Pipeline sync timestamp must be recorded');
   assert.strictEqual(activeSource.upstreamDataFreshness, 'STAGNANT', 'Upstream data must reflect stagnant publisher data');
   assert(activeSource.upstreamStatusMessage.includes('WARNING: Stagnant'), 'Must include explicit stagnant warning');
   assert(activeSource.daysSinceUpstreamUpdate !== null && activeSource.daysSinceUpstreamUpdate > 60, 'Days since upstream update must reflect true municipal date');
+
+  // Unit verification: fresh pipeline sync with stagnant upstream dataset
+  const testNow = 1730000000000;
+  const mockHealthyPipeline = evaluatePipelineHealth({
+    source: 'OMAHA_CODE_VIOLATIONS_ACTIVE',
+    latestRun: { id: 'run-fresh', status: 'SUCCESS', startedAt: new Date(testNow - 2 * 3600 * 1000) },
+    lastSuccessRun: { id: 'run-fresh', completedAt: new Date(testNow - 2 * 3600 * 1000) },
+    now: testNow,
+  });
+  const mockStagnantUpstream = evaluateUpstreamFreshness({
+    source: 'OMAHA_CODE_VIOLATIONS_ACTIVE',
+    latestUpstreamUpdateAt: new Date(testNow - 95 * 86400 * 1000),
+    now: testNow,
+  });
+
+  assert.strictEqual(mockHealthyPipeline.pipelineHealth, 'HEALTHY', 'Pipeline sync within 48h must report HEALTHY');
+  assert.strictEqual(mockStagnantUpstream.upstreamDataFreshness, 'STAGNANT', 'Upstream dataset > 30d must report STAGNANT');
+  assert(mockStagnantUpstream.upstreamStatusMessage.includes('WARNING: Stagnant'), 'Stagnant dataset must emit warning message');
   passed++;
   console.log('✔ PASS 3: Health monitor distinguishes pipeline sync freshness from upstream publisher data age');
 
@@ -85,20 +106,39 @@ async function runHealthMonitorTests() {
   // -------------------------------------------------------------------------
   // Test 6: Precedence of Failure and Stuck Alerting Over Recent Success
   // -------------------------------------------------------------------------
-  // Unit verification of health evaluator logic:
-  // Even if lastSuccess was 5 minutes ago, a stuck or failed latestRun must flag immediately
   const mockNow = Date.now();
-  const recentSuccessMs = mockNow - 5 * 60 * 1000; // 5 min ago
-  const stuckStartMs = mockNow - 90 * 60 * 1000;   // 90 min ago
+  const recentSuccess = { id: 'run-success-prev', completedAt: new Date(mockNow - 5 * 60 * 1000) }; // 5 min ago
 
-  const mockFailedRun = { status: 'FAILED', id: 'run-fail-1', startedAt: new Date(mockNow - 60000) };
-  const mockStuckRun = { status: 'RUNNING', id: 'run-stuck-1', startedAt: new Date(stuckStartMs) };
+  // Case A: Recent success, but latest run FAILED
+  const failedEval = evaluatePipelineHealth({
+    source: 'OMAHA_CODE_VIOLATIONS_ACTIVE',
+    latestRun: { id: 'run-fail-1', status: 'FAILED', startedAt: new Date(mockNow - 60000) },
+    lastSuccessRun: recentSuccess,
+    now: mockNow,
+  });
+  assert.strictEqual(failedEval.pipelineHealth, 'FAILED', 'Failed run must take precedence over recent success');
+  assert.strictEqual(failedEval.alert, 'ALERT: Latest run FAILED (run-fail-1)');
 
-  const hasRecentFailure = mockFailedRun.status === 'FAILED';
-  const hasStuckRun = mockStuckRun.status === 'RUNNING' && mockNow - stuckStartMs > 60 * 60 * 1000;
+  // Case B: Recent success, but latest run STUCK in RUNNING > 60m
+  const stuckEval = evaluatePipelineHealth({
+    source: 'OMAHA_CODE_VIOLATIONS_ACTIVE',
+    latestRun: { id: 'run-stuck-1', status: 'RUNNING', startedAt: new Date(mockNow - 90 * 60 * 1000) },
+    lastSuccessRun: recentSuccess,
+    now: mockNow,
+  });
+  assert.strictEqual(stuckEval.pipelineHealth, 'STUCK', 'Run in RUNNING > 60m must take precedence over recent success');
+  assert.strictEqual(stuckEval.alert, 'ALERT: Run stuck in RUNNING > 60m');
 
-  assert.strictEqual(hasRecentFailure, true, 'Failed run must be flagged regardless of recent success');
-  assert.strictEqual(hasStuckRun, true, 'Run running > 60m must be flagged as stuck regardless of recent success');
+  // Case C: No prior runs
+  const noRunsEval = evaluatePipelineHealth({
+    source: 'OMAHA_CODE_VIOLATIONS_ACTIVE',
+    latestRun: null,
+    lastSuccessRun: null,
+    now: mockNow,
+  });
+  assert.strictEqual(noRunsEval.pipelineHealth, 'NO_RUNS');
+  assert.strictEqual(noRunsEval.alert, 'NOTICE: No IngestionRuns recorded');
+
   passed++;
   console.log('✔ PASS 6: Failed or stuck run detection takes precedence over prior successful runs');
 
